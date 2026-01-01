@@ -248,6 +248,8 @@ scripts/config --file out/.config \
     -e BOOTUP_RECLAIM \
     -e MI_RECLAIM \
     -e RTMM \
+    -e KPROBES \
+    -e HW_BREAKPOINT \
 
 # Preflight: compile binder.o to fail fast on known errors
 make $MAKE_ARGS -j$(nproc) drivers/android/binder.o
