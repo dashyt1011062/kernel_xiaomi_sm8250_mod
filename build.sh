@@ -297,7 +297,10 @@ cd ..
 ABI_TAR=Kernel_MIUI_${TARGET_DEVICE}_ABI_${GIT_COMMIT_ID}.tar.gz
 
 if [ -f "out/Module.symvers" ]; then
-    ABI_ITEMS_OUT=(.config Module.symvers include arch/arm64/include include/generated include/uapi)
+    # Ensure UAPI headers are generated
+    make $MAKE_ARGS headers_install
+
+    ABI_ITEMS_OUT=(.config Module.symvers include arch/arm64/include include/generated include/uapi usr/include)
     ABI_ITEMS_ROOT=(scripts Makefile Kconfig)
 
     TAR_ARGS=()
