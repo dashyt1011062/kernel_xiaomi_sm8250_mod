@@ -182,9 +182,10 @@ sed -i 's/\/\/39 01 00 00 01 00 03 51 03 FF/39 01 00 00 01 00 03 51 03 FF/g' ${d
 sed -i 's/\/\/39 01 00 00 11 00 03 51 03 FF/39 01 00 00 11 00 03 51 03 FF/g' ${dts_source}/dsi-panel-j2-p2-1-38-0c-0a-dsc-cmd.dtsi
 
 
+# Use default defconfig, optionally override with configs/<device>.config if provided
 if [ -f "$CONFIG_FILE" ]; then
-    echo "Using config file: $CONFIG_FILE"
-    mkdir -p out
+    echo "Using config file override: $CONFIG_FILE"
+    make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
     cp "$CONFIG_FILE" out/.config
     make $MAKE_ARGS olddefconfig
 else
