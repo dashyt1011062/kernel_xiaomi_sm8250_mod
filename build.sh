@@ -252,7 +252,7 @@ scripts/config --file out/.config \
 make $MAKE_ARGS -j$(nproc) Image modules
 
 # Build only target device DTB to avoid unrelated DTB errors
-TARGET_DTB_PATH="arch/arm64/boot/dts/vendor/qcom/${TARGET_DEVICE}-sm8250.dtb"
+TARGET_DTB_PATH="vendor/qcom/${TARGET_DEVICE}-sm8250.dtb"
 make $MAKE_ARGS $TARGET_DTB_PATH
 
 
