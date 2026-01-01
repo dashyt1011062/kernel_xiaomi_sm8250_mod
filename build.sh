@@ -5,6 +5,7 @@
 # Ensure the script exits on error
 set -e
 
+ROOT_DIR=$(pwd)
 TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin
 GIT_COMMIT_ID=$(git rev-parse --short=8 HEAD)
 TARGET_DEVICE=$1
@@ -298,8 +299,9 @@ mv $ZIP_FILENAME ../
 cd ..
 
 ABI_TAR=Kernel_MIUI_${TARGET_DEVICE}_ABI_${GIT_COMMIT_ID}.tar.gz
+OUT_DIR="$ROOT_DIR/out"
 
-if [ -f "out/Module.symvers" ]; then
+if [ -f "${OUT_DIR}/Module.symvers" ]; then
     # Ensure UAPI headers are generated
     make $MAKE_ARGS headers_install
 
@@ -308,25 +310,25 @@ if [ -f "out/Module.symvers" ]; then
 
     TAR_ARGS=()
     for item in "${ABI_ITEMS_OUT[@]}"; do
-        if [ -e "out/${item}" ]; then
-            TAR_ARGS+=("-C" "out" "${item}")
+        if [ -e "${OUT_DIR}/${item}" ]; then
+            TAR_ARGS+=("-C" "${OUT_DIR}" "${item}")
         else
-            echo "Warning: out/${item} not found, skipping"
+            echo "Warning: ${OUT_DIR}/${item} not found, skipping"
         fi
     done
 
     for item in "${ABI_ITEMS_ROOT[@]}"; do
-        if [ -e "${item}" ]; then
-            TAR_ARGS+=("-C" "." "${item}")
+        if [ -e "${ROOT_DIR}/${item}" ]; then
+            TAR_ARGS+=("-C" "${ROOT_DIR}" "${item}")
         else
-            echo "Warning: ${item} not found, skipping"
+            echo "Warning: ${ROOT_DIR}/${item} not found, skipping"
         fi
     done
 
     tar -czf $ABI_TAR "${TAR_ARGS[@]}"
     echo "Kernel ABI package: [./$ABI_TAR]"
 else
-    echo "Warning: out/Module.symvers not found. ABI package not created."
+    echo "Warning: ${OUT_DIR}/Module.symvers not found. ABI package not created."
 fi
 
 echo "Done. The flashable zip is: [./$ZIP_FILENAME]"
