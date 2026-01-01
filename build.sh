@@ -297,9 +297,27 @@ cd ..
 ABI_TAR=Kernel_MIUI_${TARGET_DEVICE}_ABI_${GIT_COMMIT_ID}.tar.gz
 
 if [ -f "out/Module.symvers" ]; then
-    tar -czf $ABI_TAR \
-        -C out .config Module.symvers include arch/arm64/include include/generated include/uapi \
-        -C . scripts Makefile Kconfig
+    ABI_ITEMS_OUT=(.config Module.symvers include arch/arm64/include include/generated include/uapi)
+    ABI_ITEMS_ROOT=(scripts Makefile Kconfig)
+
+    TAR_ARGS=()
+    for item in "${ABI_ITEMS_OUT[@]}"; do
+        if [ -e "out/${item}" ]; then
+            TAR_ARGS+=("-C" "out" "${item}")
+        else
+            echo "Warning: out/${item} not found, skipping"
+        fi
+    done
+
+    for item in "${ABI_ITEMS_ROOT[@]}"; do
+        if [ -e "${item}" ]; then
+            TAR_ARGS+=("-C" "." "${item}")
+        else
+            echo "Warning: ${item} not found, skipping"
+        fi
+    done
+
+    tar -czf $ABI_TAR "${TAR_ARGS[@]}"
     echo "Kernel ABI package: [./$ABI_TAR]"
 else
     echo "Warning: out/Module.symvers not found. ABI package not created."
