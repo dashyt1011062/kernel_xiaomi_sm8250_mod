@@ -248,6 +248,9 @@ scripts/config --file out/.config \
     -e MI_RECLAIM \
     -e RTMM \
 
+# Preflight: compile binder.o to fail fast on known errors
+make $MAKE_ARGS -j$(nproc) drivers/android/binder.o
+
 # Build Image and modules only (skip DTB/DTBO generation)
 make $MAKE_ARGS -j$(nproc) Image modules
 
