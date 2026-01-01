@@ -1,0 +1,66 @@
+name: build-kernel-miui
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_device:
+        description: "设备代号（例如 umi / lmi / alioth）"
+        required: true
+        default: "umi"
+      ksu:
+        description: "是否启用 KernelSU (true/false)"
+        required: true
+        default: "false"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: android15-lineage22-mod
+          fetch-depth: 1
+
+      - name: install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
+
+      - name: cache toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/proton-clang
+          key: proton-clang-20210522
+
+      - name: cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache_mikernel
+          key: ccache-${{ github.sha }}
+          restore-keys: ccache-
+
+      - name: download proton-clang
+        run: |
+          if [ ! -d ~/proton-clang/proton-clang-20210522 ]; then
+            mkdir -p ~/proton-clang
+            cd ~/proton-clang
+            wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
+            unzip 20210522.zip
+          fi
+
+      - name: build
+        run: |
+          if [ "${{ inputs.ksu }}" = "true" ]; then
+            bash build.sh ${{ inputs.target_device }} ksu
+          else
+            bash build.sh ${{ inputs.target_device }}
+          fi
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-miui-${{ inputs.target_device }}
+          path: |
+            Kernel_MIUI_${{ inputs.target_device }}_*.zip
+            Kernel_MIUI_${{ inputs.target_device }}_ABI_*.tar.gz
