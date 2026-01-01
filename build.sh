@@ -247,8 +247,12 @@ scripts/config --file out/.config \
     -e MI_RECLAIM \
     -e RTMM \
 
-make $MAKE_ARGS -j$(nproc)
+# Build Image and modules only (avoid building all DTBs)
+make $MAKE_ARGS -j$(nproc) Image modules
 
+# Build only target device DTB to avoid unrelated DTB errors
+TARGET_DTB_PATH="arch/arm64/boot/dts/vendor/qcom/${TARGET_DEVICE}-sm8250.dtb"
+make $MAKE_ARGS $TARGET_DTB_PATH
 
 
 if [ -f "out/arch/arm64/boot/Image" ]; then
@@ -259,7 +263,7 @@ else
 fi
 
 echo "Generating [out/arch/arm64/boot/dtb]......"
-find out/arch/arm64/boot/dts -name '*.dtb' -exec cat {} + >out/arch/arm64/boot/dtb
+find out/arch/arm64/boot/dts/vendor/qcom -name "${TARGET_DEVICE}-sm8250*.dtb" -exec cat {} + >out/arch/arm64/boot/dtb
 
 
 # Restore modified dts
