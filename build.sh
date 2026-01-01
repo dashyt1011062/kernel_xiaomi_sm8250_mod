@@ -248,12 +248,8 @@ scripts/config --file out/.config \
     -e MI_RECLAIM \
     -e RTMM \
 
-# Build Image and modules only (avoid building all DTBs)
+# Build Image and modules only (skip DTB/DTBO generation)
 make $MAKE_ARGS -j$(nproc) Image modules
-
-# Build only target device DTB to avoid unrelated DTB errors
-TARGET_DTB_PATH="vendor/qcom/${TARGET_DEVICE}-sm8250.dtb"
-make $MAKE_ARGS $TARGET_DTB_PATH
 
 
 if [ -f "out/arch/arm64/boot/Image" ]; then
@@ -262,10 +258,6 @@ else
     echo "The file [out/arch/arm64/boot/Image] does not exist. Seems MIUI build failed."
     exit 1
 fi
-
-echo "Generating [out/arch/arm64/boot/dtb]......"
-find out/arch/arm64/boot/dts/vendor/qcom -name "${TARGET_DEVICE}-sm8250*.dtb" -exec cat {} + >out/arch/arm64/boot/dtb
-
 
 # Restore modified dts
 rm -rf ${dts_source}
@@ -286,7 +278,6 @@ if [ $KSU_ENABLE -eq 1 ]; then
 fi
 
 cp out/arch/arm64/boot/Image anykernel/kernels/
-cp out/arch/arm64/boot/dtb anykernel/kernels/
 
 echo "Build for MIUI finished."
 
@@ -307,7 +298,7 @@ ABI_TAR=Kernel_MIUI_${TARGET_DEVICE}_ABI_${GIT_COMMIT_ID}.tar.gz
 
 if [ -f "out/Module.symvers" ]; then
     tar -czf $ABI_TAR \
-        -C out .config Module.symvers include arch/arm64/include \
+        -C out .config Module.symvers include arch/arm64/include include/generated include/uapi \
         -C . scripts Makefile Kconfig
     echo "Kernel ABI package: [./$ABI_TAR]"
 else
