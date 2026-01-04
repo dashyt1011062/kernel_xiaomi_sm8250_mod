@@ -193,6 +193,12 @@ else
     make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
 fi
 
+# 强制开启 KPROBES/KRETPROBES/KPROBE_EVENTS，确保 anti-ptrace 功能可用
+scripts/config --file out/.config \
+    -e KPROBES \
+    -e KRETPROBES \
+    -e KPROBE_EVENTS
+
 scripts/config --file out/.config --set-str LOCALVERSION "${local_version_date_str}"
 
 if [ $KSU_ENABLE -eq 1 ]; then
