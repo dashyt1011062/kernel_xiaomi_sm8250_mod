@@ -56,12 +56,12 @@ static inline bool aarch64_cond_passed(u32 cond, u64 pstate) {
     }
 }
 
-static bool read_user_insn_task(struct task_struct *task, u64 pc, u32 *insn) {
+static __maybe_unused bool read_user_insn_task(struct task_struct *task, u64 pc, u32 *insn) {
     if (!task || !insn || !pc) return false;
     return rwpm_force_read_task(task, pc, insn, sizeof(*insn)) == sizeof(*insn);
 }
 
-static u64 calc_next_pc(struct pt_regs *regs, u32 insn) {
+static __maybe_unused u64 calc_next_pc(struct pt_regs *regs, u32 insn) {
     u64 pc = regs->pc;
     u64 next = pc + 4;
 
