@@ -666,6 +666,12 @@ config BOOTUP_RECLAIM
         help
           reclaim global memory when bootup
 
+config MEM_DEBUG_CORE
+	bool "Memory Debug Core (built-in)"
+	default y
+	help
+	  Built-in memory debug core driver with miscdevice IPC.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
