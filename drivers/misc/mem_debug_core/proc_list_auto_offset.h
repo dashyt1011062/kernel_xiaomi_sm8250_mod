@@ -58,7 +58,6 @@ static inline int init_task_pid_offset(int pid, int tgid) {
     struct task_struct *mytask = x_get_current();
     struct mm_struct   *mm     = get_task_mm(mytask);
     uintptr_t           addr_mytask = (uintptr_t)mytask;
-    uintptr_t           addr_mm     = (uintptr_t)mm;
     size_t              off_mm    = 0;
     size_t              off       = 0;
     size_t off_pid_static = (uintptr_t)&mytask->pid - addr_mytask;
@@ -98,5 +97,4 @@ static inline int init_task_pid_offset(int pid, int tgid) {
 
 
 #endif /* PROC_LIST_AUTO_OFFSET_H_ */
-
 
