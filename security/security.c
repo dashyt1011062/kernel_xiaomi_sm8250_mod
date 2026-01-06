@@ -164,13 +164,14 @@ late_initcall(yama_sysctl_fallback_init);
 #endif
 
 /* Force Yama LSM hooks into the chain, and keep symbols from being GC'd. */
-extern void yama_task_free(struct task_struct *task);
+extern void yama_task_free(struct task_struct *task) __attribute__((weak));
 extern void __init yama_add_hooks(void);
-
-static void *force_yama_ref __initdata __used = (void *)yama_task_free;
 
 static int __init force_yama_hooks(void)
 {
+	/* Touch weak symbol to avoid LTO stripping when present. */
+	if (yama_task_free)
+		(void)yama_task_free;
 	yama_add_hooks();
 	return 0;
 }
