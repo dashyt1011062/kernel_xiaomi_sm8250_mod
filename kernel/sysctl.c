@@ -342,15 +342,6 @@ static struct ctl_table yama_table[] = {
 	{ }
 };
 
-static struct ctl_table yama_root_table[] = {
-	{
-		.procname	= "yama",
-		.mode		= 0555,
-		.child		= yama_table,
-	},
-	{ }
-};
-
 /* The default sysctl tables: */
 
 static struct ctl_table sysctl_base_table[] = {
@@ -378,11 +369,6 @@ static struct ctl_table sysctl_base_table[] = {
 		.procname	= "dev",
 		.mode		= 0555,
 		.child		= dev_table,
-	},
-	{
-		.procname	= "kernel",
-		.mode		= 0555,
-		.child		= yama_root_table,
 	},
 	{ }
 };
@@ -1688,6 +1674,11 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 #endif
+	{
+		.procname	= "yama",
+		.mode		= 0555,
+		.child		= yama_table,
+	},
 	{ }
 };
 
