@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: android15-lineage22-mod
+          ref: ${{ github.ref }}
           fetch-depth: 1
 
       - name: install deps
