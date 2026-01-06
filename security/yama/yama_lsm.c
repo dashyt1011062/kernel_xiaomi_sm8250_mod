@@ -519,7 +519,7 @@ static void yama_init_procfs_fallback(void)
 {
 	if (yama_proc_scope)
 		return;
-	yama_proc_dir = proc_mkdir("kernel/yama", NULL);
+	yama_proc_dir = proc_mkdir("yama", NULL);
 	if (!yama_proc_dir)
 		return;
 	yama_proc_scope = proc_create("ptrace_scope", 0644, yama_proc_dir,
