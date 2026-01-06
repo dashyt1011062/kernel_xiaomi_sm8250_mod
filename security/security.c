@@ -81,8 +81,7 @@ int __init security_init(void)
 	 * Load minor LSMs, with the capability module always first.
 	 */
 	capability_add_hooks();
-	if (security_module_enable("yama"))
-		yama_add_hooks();
+	yama_add_hooks();
 	loadpin_add_hooks();
 
 	/*
