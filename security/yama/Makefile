@@ -1,3 +1,3 @@
-obj-$(CONFIG_SECURITY_YAMA) := yama.o
+obj-y := yama.o
 
 yama-y := yama_lsm.o
