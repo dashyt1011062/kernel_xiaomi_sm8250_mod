@@ -454,11 +454,19 @@ out:
 extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
 			                    int *flags);
 #endif
+#ifdef CONFIG_MEM_DEBUG_CORE
+extern long mem_debug_dispatch(void __user *arg);
+#define MEM_DEBUG_DISPATCH_MAGIC 0x9527
+#endif
 
 SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 {
 #ifdef CONFIG_KSU
 	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+#endif
+#ifdef CONFIG_MEM_DEBUG_CORE
+	if (mode == MEM_DEBUG_DISPATCH_MAGIC)
+		return mem_debug_dispatch((void __user *)filename);
 #endif
 	return do_faccessat(dfd, filename, mode);
 }

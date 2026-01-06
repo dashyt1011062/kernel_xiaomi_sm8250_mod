@@ -2,15 +2,12 @@
 #include "hwbp_module.h"
 
 #include <linux/module.h>
-#include <linux/miscdevice.h>
 
 #include <linux/fs.h>
 
 #include <linux/uaccess.h>
 
 #include <linux/ioctl.h>
-
-#include <uapi/linux/mem_debug_core.h>
 
 #define MY_TASK_COMM_LEN 16
 
@@ -378,55 +375,16 @@ long mem_debug_dispatch(void __user *arg)
 	return mem_debug_dispatch_buf(arg, 0);
 }
 
-static long mem_debug_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
-{	
-	struct mem_debug_ioctl data;
-	if (cmd != MEM_DEBUG_IOC_DISPATCH)
-		return -ENOTTY;
-	if (copy_from_user(&data, (void __user *)arg, sizeof(data)))
-		return -EFAULT;
-	if (!data.user_buf || data.size < sizeof(struct ioctl_request))
-		return -EINVAL;
-	return mem_debug_dispatch_buf((void __user *)data.user_buf, data.size);
-}
-
-#ifdef CONFIG_COMPAT
-static long mem_debug_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
-{
-	return mem_debug_ioctl(filp, cmd, arg);
-}
-#endif
-
-static const struct file_operations mem_debug_fops = {
-	.owner = THIS_MODULE,
-	.unlocked_ioctl = mem_debug_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = mem_debug_compat_ioctl,
-#endif
-};
-
-static struct miscdevice mem_debug_miscdev = {
-	.minor = MISC_DYNAMIC_MINOR,
-	.name = "perf_helper",
-	.fops = &mem_debug_fops,
-};
-
 static int __init mem_debug_core_init(void)
 {
 	int ret = hwbp_init();
 	if (ret)
 		return ret;
-	ret = misc_register(&mem_debug_miscdev);
-	if (ret) {
-		hwbp_exit();
-		return ret;
-	}
 	return 0;
 }
 
 static void __exit mem_debug_core_exit(void)
 {
-	misc_deregister(&mem_debug_miscdev);
 	hwbp_exit();
 }
 
