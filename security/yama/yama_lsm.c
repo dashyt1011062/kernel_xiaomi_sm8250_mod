@@ -41,6 +41,7 @@ struct ptrace_relation {
 
 static LIST_HEAD(ptracer_relations);
 static DEFINE_SPINLOCK(ptracer_relations_lock);
+static bool yama_hooks_added;
 
 static void yama_relation_cleanup(struct work_struct *work);
 static DECLARE_WORK(yama_relation_work, yama_relation_cleanup);
@@ -481,7 +482,17 @@ static inline void yama_init_sysctl(void) { }
 
 void __init yama_add_hooks(void)
 {
+	if (yama_hooks_added)
+		return;
+	yama_hooks_added = true;
 	pr_info("Yama: becoming mindful.\n");
 	security_add_hooks(yama_hooks, ARRAY_SIZE(yama_hooks), "yama");
 	yama_init_sysctl();
 }
+
+static int __init yama_force_initcall(void)
+{
+	yama_add_hooks();
+	return 0;
+}
+late_initcall(yama_force_initcall);
