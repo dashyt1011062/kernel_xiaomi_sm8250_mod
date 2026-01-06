@@ -100,6 +100,34 @@ static int __init yama_sysctl_late_init(void)
 }
 late_initcall(yama_sysctl_late_init);
 
+#ifdef CONFIG_SYSCTL
+static int md_test_value = 1;
+
+static struct ctl_path md_test_path[] = {
+	{ .procname = "kernel", },
+	{ }
+};
+
+static struct ctl_table md_test_table[] = {
+	{
+		.procname     = "md_test",
+		.data         = &md_test_value,
+		.maxlen       = sizeof(md_test_value),
+		.mode         = 0644,
+		.proc_handler = proc_dointvec,
+	},
+	{ }
+};
+
+static int __init md_test_sysctl_init(void)
+{
+	if (!register_sysctl_paths(md_test_path, md_test_table))
+		pr_err("md_test: sysctl registration failed\n");
+	return 0;
+}
+late_initcall(md_test_sysctl_init);
+#endif
+
 /* Save user chosen LSM */
 static int __init choose_lsm(char *str)
 {
