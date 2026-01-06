@@ -324,6 +324,33 @@ extern struct ctl_table firmware_config_table[];
 int sysctl_legacy_va_layout;
 #endif
 
+/* Yama ptrace scope fallback sysctl under /proc/sys/kernel/yama/ptrace_scope */
+static int yama_ptrace_scope = 1;
+static int yama_zero;
+static int yama_max_scope = 3;
+
+static struct ctl_table yama_table[] = {
+	{
+		.procname	= "ptrace_scope",
+		.data		= &yama_ptrace_scope,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &yama_zero,
+		.extra2		= &yama_max_scope,
+	},
+	{ }
+};
+
+static struct ctl_table yama_root_table[] = {
+	{
+		.procname	= "yama",
+		.mode		= 0555,
+		.child		= yama_table,
+	},
+	{ }
+};
+
 /* The default sysctl tables: */
 
 static struct ctl_table sysctl_base_table[] = {
@@ -351,6 +378,11 @@ static struct ctl_table sysctl_base_table[] = {
 		.procname	= "dev",
 		.mode		= 0555,
 		.child		= dev_table,
+	},
+	{
+		.procname	= "kernel",
+		.mode		= 0555,
+		.child		= yama_root_table,
 	},
 	{ }
 };
