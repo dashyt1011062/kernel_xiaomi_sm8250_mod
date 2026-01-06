@@ -93,6 +93,13 @@ int __init security_init(void)
 	return 0;
 }
 
+static int __init yama_sysctl_late_init(void)
+{
+	yama_init_sysctl();
+	return 0;
+}
+late_initcall(yama_sysctl_late_init);
+
 /* Save user chosen LSM */
 static int __init choose_lsm(char *str)
 {

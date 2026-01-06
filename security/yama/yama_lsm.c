@@ -42,6 +42,7 @@ struct ptrace_relation {
 static LIST_HEAD(ptracer_relations);
 static DEFINE_SPINLOCK(ptracer_relations_lock);
 static bool yama_hooks_added;
+static bool yama_sysctl_registered;
 
 static void yama_relation_cleanup(struct work_struct *work);
 static DECLARE_WORK(yama_relation_work, yama_relation_cleanup);
@@ -473,8 +474,11 @@ static struct ctl_table yama_sysctl_table[] = {
 };
 void __init yama_init_sysctl(void)
 {
+	if (yama_sysctl_registered)
+		return;
 	if (!register_sysctl_paths(yama_sysctl_path, yama_sysctl_table))
 		panic("Yama: sysctl registration failed.\n");
+	yama_sysctl_registered = true;
 }
 #else
 void __init yama_init_sysctl(void) { }
