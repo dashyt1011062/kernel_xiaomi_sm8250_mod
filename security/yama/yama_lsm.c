@@ -23,6 +23,7 @@
 #include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/proc_fs.h>
+#include <linux/uaccess.h>
 
 static struct proc_dir_entry *yama_proc_dir;
 static struct proc_dir_entry *yama_proc_scope;
@@ -508,9 +509,9 @@ static ssize_t yama_scope_write(struct file *file, const char __user *buf,
 	return count;
 }
 
-static const struct proc_ops yama_scope_fops = {
-	.proc_read	= yama_scope_read,
-	.proc_write	= yama_scope_write,
+static const struct file_operations yama_scope_fops = {
+	.read		= yama_scope_read,
+	.write		= yama_scope_write,
 };
 
 static void yama_init_procfs_fallback(void)
