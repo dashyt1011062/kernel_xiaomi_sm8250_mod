@@ -338,6 +338,8 @@ static void hwbp_handler(struct perf_event *bp,
 			if (read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn)) {
 				next_pc = calc_next_pc(regs, insn);
 			}
+			printk(KERN_INFO "wuji_step pc=0x%llx insn=0x%08x next=0x%llx\n",
+			       (unsigned long long)regs->pc, insn, (unsigned long long)next_pc);
 			memcpy(&new_attr, &hwbp_handle_info->original_attr, sizeof(new_attr));
 			new_attr.bp_addr = next_pc;
 			new_attr.bp_len = HW_BREAKPOINT_LEN_4;
