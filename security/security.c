@@ -131,8 +131,6 @@ late_initcall(md_test_sysctl_init);
 #ifdef CONFIG_SYSCTL
 /* Fallback Yama sysctl registration when LSM init path is missing. */
 static int yama_ptrace_scope = 1;
-static int yama_zero;
-static int yama_max_scope = 3;
 
 static struct ctl_path yama_sysctl_fallback_path[] = {
 	{ .procname = "kernel", },
@@ -146,9 +144,7 @@ static struct ctl_table yama_sysctl_fallback_table[] = {
 		.data         = &yama_ptrace_scope,
 		.maxlen       = sizeof(int),
 		.mode         = 0644,
-		.proc_handler = proc_dointvec_minmax,
-		.extra1       = &yama_zero,
-		.extra2       = &yama_max_scope,
+		.proc_handler = proc_dointvec,
 	},
 	{ }
 };
@@ -158,6 +154,8 @@ static int __init yama_sysctl_fallback_init(void)
 	if (!register_sysctl_paths(yama_sysctl_fallback_path,
 				   yama_sysctl_fallback_table))
 		pr_err("yama: fallback sysctl registration failed\n");
+	else
+		pr_info("yama: fallback ptrace_scope sysctl registered\n");
 	return 0;
 }
 late_initcall(yama_sysctl_fallback_init);
