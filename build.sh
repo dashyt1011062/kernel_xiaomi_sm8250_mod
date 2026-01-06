@@ -197,7 +197,8 @@ fi
 scripts/config --file out/.config \
     -e KPROBES \
     -e KRETPROBES \
-    -e KPROBE_EVENTS
+    -e KPROBE_EVENTS \
+    -e PID_IN_CONTEXTIDR
 
 scripts/config --file out/.config --set-str LOCALVERSION "${local_version_date_str}"
 
@@ -260,8 +261,8 @@ scripts/config --file out/.config \
 # Preflight: compile binder.o to fail fast on known errors
 make $MAKE_ARGS -j$(nproc) drivers/android/binder.o
 
-# Build Image and modules only (skip DTB/DTBO generation)
-make $MAKE_ARGS -j$(nproc) Image modules
+# Build Image, modules, and DTBO
+make $MAKE_ARGS -j$(nproc) Image modules dtbs dtbo.img
 
 
 if [ -f "out/arch/arm64/boot/Image" ]; then
@@ -290,6 +291,10 @@ if [ $KSU_ENABLE -eq 1 ]; then
 fi
 
 cp out/arch/arm64/boot/Image anykernel/kernels/
+
+if [ -f "out/arch/arm64/boot/dtbo.img" ]; then
+    cp out/arch/arm64/boot/dtbo.img anykernel/
+fi
 
 echo "Build for MIUI finished."
 
