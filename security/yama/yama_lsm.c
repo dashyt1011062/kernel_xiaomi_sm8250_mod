@@ -22,6 +22,10 @@
 #include <linux/task_work.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
+#include <linux/proc_fs.h>
+
+static struct proc_dir_entry *yama_proc_dir;
+static struct proc_dir_entry *yama_proc_scope;
 
 #define YAMA_SCOPE_DISABLED	0
 #define YAMA_SCOPE_RELATIONAL	1
@@ -472,12 +476,68 @@ static struct ctl_table yama_sysctl_table[] = {
 	},
 	{ }
 };
+
+static ssize_t yama_scope_read(struct file *file, char __user *buf,
+			       size_t count, loff_t *ppos)
+{
+	char tmp[16];
+	int len = scnprintf(tmp, sizeof(tmp), "%d\n", ptrace_scope);
+
+	return simple_read_from_buffer(buf, count, ppos, tmp, len);
+}
+
+static ssize_t yama_scope_write(struct file *file, const char __user *buf,
+				size_t count, loff_t *ppos)
+{
+	char tmp[16];
+	int val;
+
+	if (count >= sizeof(tmp))
+		return -EINVAL;
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+	tmp[count] = '\0';
+	if (kstrtoint(tmp, 0, &val))
+		return -EINVAL;
+	if (val < YAMA_SCOPE_DISABLED || val > YAMA_SCOPE_NO_ATTACH)
+		return -EINVAL;
+	if (!capable(CAP_SYS_PTRACE))
+		return -EPERM;
+
+	ptrace_scope = val;
+	return count;
+}
+
+static const struct proc_ops yama_scope_fops = {
+	.proc_read	= yama_scope_read,
+	.proc_write	= yama_scope_write,
+};
+
+static void yama_init_procfs_fallback(void)
+{
+	if (yama_proc_scope)
+		return;
+	yama_proc_dir = proc_mkdir("kernel/yama", NULL);
+	if (!yama_proc_dir)
+		return;
+	yama_proc_scope = proc_create("ptrace_scope", 0644, yama_proc_dir,
+				      &yama_scope_fops);
+}
+
+static int __init yama_procfs_initcall(void)
+{
+	yama_init_procfs_fallback();
+	return 0;
+}
+late_initcall(yama_procfs_initcall);
 void __init yama_init_sysctl(void)
 {
 	if (yama_sysctl_registered)
 		return;
-	if (!register_sysctl_paths(yama_sysctl_path, yama_sysctl_table))
-		panic("Yama: sysctl registration failed.\n");
+	if (!register_sysctl_paths(yama_sysctl_path, yama_sysctl_table)) {
+		pr_err("Yama: sysctl registration failed.\n");
+		return;
+	}
 	yama_sysctl_registered = true;
 }
 #else
