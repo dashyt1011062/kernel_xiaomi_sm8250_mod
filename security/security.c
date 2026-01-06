@@ -167,7 +167,7 @@ late_initcall(yama_sysctl_fallback_init);
 extern void yama_task_free(struct task_struct *task);
 extern void __init yama_add_hooks(void);
 
-static void *force_yama_ref __initdata = (void *)yama_task_free;
+static void *force_yama_ref __initdata __used = (void *)yama_task_free;
 
 static int __init force_yama_hooks(void)
 {
