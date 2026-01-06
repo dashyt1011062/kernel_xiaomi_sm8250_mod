@@ -50,6 +50,7 @@ enum {
 	CMD_HWBP_SET_STEP_SIMULATE,			// 指令模拟步进
 	CMD_HWBP_GET_TRACE_COUNT,			// 获取追踪记录数量
 	CMD_HWBP_GET_TRACE_DATA,				// 获取追踪记录数据
+	CMD_HWBP_GET_STEP_LOG,				// 获取模拟步进日志
 };
 
 int hwbp_init(void);
@@ -96,6 +97,16 @@ struct TRACE_ITEM_FULL {
 	uint64_t far;
 	uint64_t esr;
 	uint32_t insn;
+};
+#pragma pack()
+
+#pragma pack(1)
+struct STEP_LOG_ITEM {
+	uint64_t task_id;
+	uint64_t pc;
+	uint64_t next_pc;
+	uint32_t insn;
+	uint32_t reserved;
 };
 #pragma pack()
 struct HWBP_HANDLE_INFO {

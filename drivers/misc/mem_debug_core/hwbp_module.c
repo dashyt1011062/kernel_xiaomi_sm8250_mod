@@ -23,6 +23,26 @@ static bool g_trace_enabled = false;
 static int g_trace_mode = TRACE_MODE_PC;
 static size_t g_trace_capacity = CONFIG_TRACE_DEFAULT_SIZE;
 static size_t g_trace_step_count = CONFIG_TRACE_DEFAULT_STEP;
+static DEFINE_SPINLOCK(g_step_log_lock);
+#define STEP_LOG_CAPACITY 1024
+static struct STEP_LOG_ITEM g_step_log[STEP_LOG_CAPACITY];
+static size_t g_step_log_head;
+static size_t g_step_log_count;
+
+static void step_log_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc)
+{
+	unsigned long flags;
+	spin_lock_irqsave(&g_step_log_lock, flags);
+	g_step_log[g_step_log_head].task_id = tid;
+	g_step_log[g_step_log_head].pc = pc;
+	g_step_log[g_step_log_head].next_pc = next_pc;
+	g_step_log[g_step_log_head].insn = insn;
+	g_step_log[g_step_log_head].reserved = 0;
+	g_step_log_head = (g_step_log_head + 1) % STEP_LOG_CAPACITY;
+	if (g_step_log_count < STEP_LOG_CAPACITY)
+		g_step_log_count++;
+	spin_unlock_irqrestore(&g_step_log_lock, flags);
+}
 static bool g_simulate_step_enabled = false;
 static const size_t g_read_mem_max = 4096;
 
@@ -340,6 +360,7 @@ static void hwbp_handler(struct perf_event *bp,
 			}
 			printk(KERN_INFO "wuji_step pc=0x%llx insn=0x%08x next=0x%llx\n",
 			       (unsigned long long)regs->pc, insn, (unsigned long long)next_pc);
+			step_log_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
 			memcpy(&new_attr, &hwbp_handle_info->original_attr, sizeof(new_attr));
 			new_attr.bp_addr = next_pc;
 			new_attr.bp_len = HW_BREAKPOINT_LEN_4;
@@ -969,6 +990,48 @@ static ssize_t OnCmdGetTraceData(struct ioctl_request *hdr, char __user* buf) {
 	mutex_unlock(&g_hwbp_handle_info_mutex);
 	return copied;
 }
+
+static ssize_t OnCmdGetStepLog(struct ioctl_request *hdr, char __user* buf) {
+	unsigned long flags;
+	size_t max_items;
+	size_t to_copy;
+	size_t start;
+	size_t i;
+	struct STEP_LOG_ITEM *tmp;
+	size_t size = hdr->buf_size;
+	if (!buf || size < sizeof(struct STEP_LOG_ITEM))
+		return -EINVAL;
+	max_items = size / sizeof(struct STEP_LOG_ITEM);
+	spin_lock_irqsave(&g_step_log_lock, flags);
+	to_copy = g_step_log_count;
+	if (to_copy > max_items)
+		to_copy = max_items;
+	start = (g_step_log_head + STEP_LOG_CAPACITY - g_step_log_count) % STEP_LOG_CAPACITY;
+	spin_unlock_irqrestore(&g_step_log_lock, flags);
+
+	if (to_copy == 0)
+		return 0;
+
+	tmp = kmalloc(sizeof(struct STEP_LOG_ITEM) * to_copy, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	spin_lock_irqsave(&g_step_log_lock, flags);
+	for (i = 0; i < to_copy; ++i) {
+		size_t idx = (start + i) % STEP_LOG_CAPACITY;
+		memcpy(&tmp[i], &g_step_log[idx], sizeof(struct STEP_LOG_ITEM));
+	}
+	g_step_log_count = 0;
+	g_step_log_head = 0;
+	spin_unlock_irqrestore(&g_step_log_lock, flags);
+
+	if (x_copy_to_user((void*)buf, tmp, sizeof(struct STEP_LOG_ITEM) * to_copy)) {
+		kfree(tmp);
+		return -EFAULT;
+	}
+	kfree(tmp);
+	return (ssize_t)(to_copy * sizeof(struct STEP_LOG_ITEM));
+}
 ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 	switch (hdr->cmd) {
 	case CMD_HWBP_OPEN_PROCESS:
@@ -1013,6 +1076,8 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdGetTraceCount(hdr, buf);
 	case CMD_HWBP_GET_TRACE_DATA:
 		return OnCmdGetTraceData(hdr, buf);
+	case CMD_HWBP_GET_STEP_LOG:
+		return OnCmdGetStepLog(hdr, buf);
 	case CMD_HWBP_HIDE_KERNEL_MODULE:
 		return OnCmdHideKernelModule(hdr, buf);
 	default:
