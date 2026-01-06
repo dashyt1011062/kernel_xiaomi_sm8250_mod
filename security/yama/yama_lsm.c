@@ -18,6 +18,7 @@
 #include <linux/prctl.h>
 #include <linux/ratelimit.h>
 #include <linux/workqueue.h>
+#include <linux/cred.h>
 #include <linux/string_helpers.h>
 #include <linux/task_work.h>
 #include <linux/sched.h>
@@ -502,7 +503,7 @@ static ssize_t yama_scope_write(struct file *file, const char __user *buf,
 		return -EINVAL;
 	if (val < YAMA_SCOPE_DISABLED || val > YAMA_SCOPE_NO_ATTACH)
 		return -EINVAL;
-	if (!capable(CAP_SYS_PTRACE))
+	if (!uid_eq(current_euid(), GLOBAL_ROOT_UID))
 		return -EPERM;
 
 	ptrace_scope = val;
