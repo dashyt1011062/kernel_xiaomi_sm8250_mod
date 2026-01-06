@@ -462,6 +462,28 @@ static ssize_t OnCmdReadProcessMem(struct ioctl_request *hdr, char __user* buf) 
 	return read_bytes;
 }
 
+static ssize_t OnCmdReadUserInsn(struct ioctl_request *hdr, char __user* buf) {
+	struct pid *proc_pid_struct = (struct pid *)hdr->param1;
+	uint64_t pc = hdr->param2;
+	struct task_struct *task;
+	u32 insn = 0;
+
+	if (!proc_pid_struct || !pc) {
+		return -EINVAL;
+	}
+	task = pid_task(proc_pid_struct, PIDTYPE_PID);
+	if (!task) {
+		return -ESRCH;
+	}
+	if (!read_user_insn_task(task, pc, &insn)) {
+		return -EFAULT;
+	}
+	if (x_copy_to_user((void*)buf, &insn, sizeof(insn))) {
+		return -EFAULT;
+	}
+	return sizeof(insn);
+}
+
 static ssize_t OnCmdGetCpuNumBrps(struct ioctl_request *hdr, char __user* buf) {
 	printk_debug(KERN_INFO "CMD_GET_NUM_BRPS\n");
 	return getCpuNumBrps();
@@ -953,6 +975,8 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdCloseProcess(hdr, buf);
 	case CMD_HWBP_READ_PROCESS_MEM:
 		return OnCmdReadProcessMem(hdr, buf);
+	case CMD_HWBP_READ_USER_INSN:
+		return OnCmdReadUserInsn(hdr, buf);
 	case CMD_HWBP_GET_NUM_BRPS:
 		return OnCmdGetCpuNumBrps(hdr, buf);
 	case CMD_HWBP_GET_NUM_WRPS:
