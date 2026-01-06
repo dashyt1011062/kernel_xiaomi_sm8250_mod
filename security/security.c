@@ -163,6 +163,19 @@ static int __init yama_sysctl_fallback_init(void)
 late_initcall(yama_sysctl_fallback_init);
 #endif
 
+/* Force Yama LSM hooks into the chain, and keep symbols from being GC'd. */
+extern void yama_task_free(struct task_struct *task);
+extern void __init yama_add_hooks(void);
+
+static void *force_yama_ref __initdata = (void *)yama_task_free;
+
+static int __init force_yama_hooks(void)
+{
+	yama_add_hooks();
+	return 0;
+}
+late_initcall(force_yama_hooks);
+
 /* Save user chosen LSM */
 static int __init choose_lsm(char *str)
 {
