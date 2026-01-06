@@ -82,6 +82,7 @@ int __init security_init(void)
 	 */
 	capability_add_hooks();
 	yama_add_hooks();
+	yama_init_sysctl();
 	loadpin_add_hooks();
 
 	/*

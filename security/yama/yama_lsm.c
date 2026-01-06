@@ -471,13 +471,13 @@ static struct ctl_table yama_sysctl_table[] = {
 	},
 	{ }
 };
-static void __init yama_init_sysctl(void)
+void __init yama_init_sysctl(void)
 {
 	if (!register_sysctl_paths(yama_sysctl_path, yama_sysctl_table))
 		panic("Yama: sysctl registration failed.\n");
 }
 #else
-static inline void yama_init_sysctl(void) { }
+void __init yama_init_sysctl(void) { }
 #endif /* CONFIG_SYSCTL */
 
 void __init yama_add_hooks(void)
