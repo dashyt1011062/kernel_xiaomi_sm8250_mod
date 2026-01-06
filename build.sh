@@ -114,8 +114,8 @@ rm -rf anykernel/
 echo "Clone AnyKernel3 for packing kernel (repo: https://github.com/liyafe1997/AnyKernel3)"
 git clone https://github.com/liyafe1997/AnyKernel3 -b kona --single-branch --depth=1 anykernel
 
-# Enable dtbo flashing in AnyKernel3
-sed -i 's/^# flash_dtbo;/flash_dtbo;/' anykernel/anykernel.sh
+# Do not flash dtbo in AnyKernel3 (safety)
+# sed -i 's/^# flash_dtbo;/flash_dtbo;/' anykernel/anykernel.sh
 
 # Add date to local version
 local_version_str="-perf"
