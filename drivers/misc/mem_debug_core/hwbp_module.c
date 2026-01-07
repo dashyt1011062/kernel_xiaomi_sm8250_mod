@@ -20,7 +20,7 @@ static int g_trace_mode = TRACE_MODE_PC;
 static size_t g_trace_capacity = CONFIG_TRACE_DEFAULT_SIZE;
 static size_t g_trace_step_count = CONFIG_TRACE_DEFAULT_STEP;
 static DEFINE_SPINLOCK(g_step_log_lock);
-#define STEP_LOG_CAPACITY 1024
+#define STEP_LOG_CAPACITY 8192
 static struct STEP_LOG_ITEM g_step_log[STEP_LOG_CAPACITY];
 static size_t g_step_log_head;
 static size_t g_step_log_count;
