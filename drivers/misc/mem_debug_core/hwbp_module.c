@@ -29,7 +29,7 @@ static struct STEP_LOG_ITEM g_step_log[STEP_LOG_CAPACITY];
 static size_t g_step_log_head;
 static size_t g_step_log_count;
 
-static void step_log_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc)
+static __maybe_unused void step_log_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc)
 {
 	unsigned long flags;
 	spin_lock_irqsave(&g_step_log_lock, flags);
