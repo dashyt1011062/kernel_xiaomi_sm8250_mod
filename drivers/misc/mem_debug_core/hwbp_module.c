@@ -269,6 +269,53 @@ static void hwbp_handler(struct perf_event *bp,
 		}
 		mutex_lock(&hwbp_handle_info->hit_lock);
 #ifdef CONFIG_MODIFY_HIT_NEXT_MODE
+		if (g_simulate_step_enabled &&
+		    hwbp_handle_info->task &&
+		    hwbp_handle_info->original_attr.bp_type == HW_BREAKPOINT_X) {
+			u64 next_pc = regs->pc + 4;
+			u32 insn = 0;
+			if (!hwbp_handle_info->step_pending) {
+				hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
+				hwbp_handle_info->step_pending = true;
+				hwbp_handle_info->step_remaining = g_trace_step_count ? g_trace_step_count : 1;
+			}
+			if (read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn)) {
+				next_pc = calc_next_pc(regs, insn);
+			}
+			step_log_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
+			if (hwbp_handle_info->step_remaining > 0) {
+				hwbp_handle_info->step_remaining--;
+			}
+			if (hwbp_handle_info->step_remaining == 0) {
+				hwbp_handle_info->step_pending = false;
+				if (hwbp_handle_info->sim_next_active && hwbp_handle_info->sample_hbp) {
+					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &hwbp_handle_info->original_attr)) {
+						toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 1);
+					}
+					hwbp_handle_info->sim_next_active = false;
+				}
+				mutex_unlock(&hwbp_handle_info->hit_lock);
+				continue;
+			}
+			{
+				struct perf_event_attr new_attr;
+				memcpy(&new_attr, &hwbp_handle_info->original_attr, sizeof(new_attr));
+				new_attr.bp_addr = next_pc;
+				new_attr.bp_len = HW_BREAKPOINT_LEN_4;
+				new_attr.bp_type = HW_BREAKPOINT_X;
+				new_attr.disabled = 0;
+				if (x_modify_user_hw_breakpoint(bp, &new_attr)) {
+					toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 0);
+					hwbp_handle_info->sim_next_active = false;
+				} else {
+					hwbp_handle_info->sim_next_attr = new_attr;
+					hwbp_handle_info->sim_next_active = true;
+				}
+			}
+			mutex_unlock(&hwbp_handle_info->hit_lock);
+			continue;
+		}
+#endif
 		if(hwbp_handle_info->next_instruction_attr.bp_addr != regs->pc) {
 			// first hit
 			bool should_toggle = true;
