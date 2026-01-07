@@ -17,10 +17,6 @@ static atomic64_t g_hook_pc;
 
 static struct mutex g_hwbp_handle_info_mutex;
 static cvector g_hwbp_handle_info_arr = NULL;
-#ifdef CONFIG_USE_SINGLE_STEP_MODE
-static struct step_hook g_step_hook;
-static bool g_step_hook_installed = false;
-#endif
 
 static bool g_trace_enabled = false;
 static int g_trace_mode = TRACE_MODE_PC;
@@ -351,48 +347,6 @@ static void hwbp_handler(struct perf_event *bp,
 			continue;
 		}
 		mutex_lock(&hwbp_handle_info->hit_lock);
-#ifdef CONFIG_USE_SINGLE_STEP_MODE
-		hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
-		if (g_simulate_step_enabled && hwbp_handle_info->task &&
-		    hwbp_handle_info->original_attr.bp_type == HW_BREAKPOINT_X) {
-			struct perf_event_attr new_attr;
-			u32 insn = 0;
-			u64 next_pc = regs->pc + 4;
-			if (read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn)) {
-				next_pc = calc_next_pc(regs, insn);
-			}
-			printk(KERN_INFO "wuji_step pc=0x%llx insn=0x%08x next=0x%llx\n",
-			       (unsigned long long)regs->pc, insn, (unsigned long long)next_pc);
-			step_log_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
-			memcpy(&new_attr, &hwbp_handle_info->original_attr, sizeof(new_attr));
-			new_attr.bp_addr = next_pc;
-			new_attr.bp_len = HW_BREAKPOINT_LEN_4;
-			new_attr.bp_type = HW_BREAKPOINT_X;
-			new_attr.disabled = 0;
-			if (x_modify_user_hw_breakpoint(bp, &new_attr)) {
-				toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 0);
-			} else {
-				hwbp_handle_info->sim_next_attr = new_attr;
-				hwbp_handle_info->sim_next_active = true;
-			}
-		} else if (hwbp_handle_info->task) {
-			struct perf_event_attr new_attr;
-			bool disabled_ok = true;
-			hwbp_handle_info->step_pending = true;
-			hwbp_handle_info->step_remaining = g_trace_enabled ? (g_trace_step_count ? g_trace_step_count : 1) : 1;
-			memcpy(&new_attr, &hwbp_handle_info->original_attr, sizeof(new_attr));
-			new_attr.disabled = 1;
-			if (x_modify_user_hw_breakpoint(bp, &new_attr)) {
-				disabled_ok = toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 0);
-			}
-			if (!disabled_ok || x_user_enable_single_step(hwbp_handle_info->task) != 0) {
-				hwbp_handle_info->step_pending = false;
-				if (x_modify_user_hw_breakpoint(bp, &hwbp_handle_info->original_attr)) {
-					toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 1);
-				}
-			}
-		}
-#else
 #ifdef CONFIG_MODIFY_HIT_NEXT_MODE
 		if(hwbp_handle_info->next_instruction_attr.bp_addr != regs->pc) {
 			// first hit
@@ -426,7 +380,6 @@ static void hwbp_handler(struct perf_event *bp,
 #else
 		hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
 		toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 0);
-#endif
 #endif
 		mutex_unlock(&hwbp_handle_info->hit_lock);
 	}
