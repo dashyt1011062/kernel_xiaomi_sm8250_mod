@@ -315,7 +315,6 @@ static void hwbp_handler(struct perf_event *bp,
 			mutex_unlock(&hwbp_handle_info->hit_lock);
 			continue;
 		}
-#endif
 		if(hwbp_handle_info->next_instruction_attr.bp_addr != regs->pc) {
 			// first hit
 			bool should_toggle = true;
