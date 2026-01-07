@@ -408,6 +408,17 @@ static void hwbp_handler(struct perf_event *bp,
 			if(!arm64_recovery_bp_to_original(bp, &hwbp_handle_info->original_attr, &hwbp_handle_info->next_instruction_attr)) {
 				toggle_bp_registers_directly(&hwbp_handle_info->next_instruction_attr, hwbp_handle_info->is_32bit_task, 0);
 			}
+			/* record step log for trace mode */
+			if (hwbp_handle_info->original_attr.bp_type == HW_BREAKPOINT_X && hwbp_handle_info->task) {
+				u64 next_pc = regs->pc + 4;
+				u32 insn = 0;
+				if (read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn)) {
+					next_pc = calc_next_pc(regs, insn);
+				}
+				step_log_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
+				printk(KERN_INFO "wuji_step pc=0x%llx insn=0x%08x next=0x%llx\n",
+				       (unsigned long long)regs->pc, insn, (unsigned long long)next_pc);
+			}
 		}
 #else
 		hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
