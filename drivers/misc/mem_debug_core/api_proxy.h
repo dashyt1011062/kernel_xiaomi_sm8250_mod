@@ -22,28 +22,6 @@ static __maybe_unused int x_modify_user_hw_breakpoint(struct perf_event *bp, str
 	return modify_user_hw_breakpoint(bp, attr);
 }
 
-#ifdef CONFIG_USE_SINGLE_STEP_MODE
-static __maybe_unused int x_user_enable_single_step(struct task_struct *task) {
-	user_enable_single_step(task);
-	return 0;
-}
-
-static __maybe_unused int x_user_disable_single_step(struct task_struct *task) {
-	user_disable_single_step(task);
-	return 0;
-}
-
-static __maybe_unused int x_register_step_hook(struct step_hook *hook) {
-	register_step_hook(hook);
-	return 0;
-}
-
-static __maybe_unused int x_unregister_step_hook(struct step_hook *hook) {
-	unregister_step_hook(hook);
-	return 0;
-}
-#endif
-
 static inline bool x_isdigit(char c) { return (unsigned)(c - '0') < 10; }
 static inline int x_atoi(const char arr[]) {
 	int index = 0;

@@ -21,6 +21,15 @@ jobs:
           ref: ${{ github.ref }}
           fetch-depth: 1
 
+      - name: cache apt
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt
+            /var/lib/apt/lists
+          key: apt-${{ runner.os }}-ubuntu-22.04
+          restore-keys: apt-${{ runner.os }}-
+
       - name: install deps
         run: |
           sudo apt-get update
@@ -37,12 +46,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache_mikernel
-          key: ccache-${{ github.sha }}
-          restore-keys: ccache-
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
 
       - name: download proton-clang
         run: |
-          if [ ! -d ~/proton-clang/proton-clang-20210522 ]; then
+          if [ ! -x ~/proton-clang/proton-clang-20210522/bin/clang ]; then
             mkdir -p ~/proton-clang
             cd ~/proton-clang
             wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
@@ -50,6 +60,11 @@ jobs:
           fi
 
       - name: build
+        env:
+          CCACHE_DIR: ~/.cache/ccache_mikernel
+          CCACHE_MAXSIZE: 5G
+          CCACHE_COMPRESS: 1
+          CCACHE_CPP2: 1
         run: |
           if [ "${{ inputs.ksu }}" = "true" ]; then
             bash build.sh ${{ inputs.target_device }} ksu

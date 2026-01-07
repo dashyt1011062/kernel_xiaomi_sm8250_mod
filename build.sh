@@ -51,6 +51,9 @@ fi
 
 # Enable ccache for speed up compiling
 export CCACHE_DIR="$HOME/.cache/ccache_mikernel"
+export CCACHE_MAXSIZE="5G"
+export CCACHE_COMPRESS="1"
+export CCACHE_CPP2="1"
 export CC="ccache gcc"
 export CXX="ccache g++"
 export PATH="/usr/lib/ccache:$PATH"

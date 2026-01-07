@@ -6,9 +6,6 @@
 #include <asm/debug-monitors.h>
 #include <asm/sysreg.h>
 
-/* 强制禁用 CPU 单步路径，统一使用“修改下一指令地址”模拟步进 */
-#undef CONFIG_USE_SINGLE_STEP_MODE
-
 extern ssize_t rwpm_force_read_task(struct task_struct *task, size_t addr, void *dst, size_t size);
 //////////////////////////////////////////////////////////////////
 
@@ -247,82 +244,6 @@ static void hwbp_hit_user_info_callback(struct perf_event *bp,
 	hwbp_handle_info->hit_total_count++;
 	record_hit_details(hwbp_handle_info, regs);
 }
-
-#ifdef CONFIG_USE_SINGLE_STEP_MODE
-static int hwbp_step_hook(struct pt_regs *regs, unsigned int esr) {
-	citerator iter;
-	struct task_struct *task = current;
-	int handled = DBG_HOOK_ERROR;
-	if (!task) return DBG_HOOK_ERROR;
-
-	mutex_lock(&g_hwbp_handle_info_mutex);
-	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
-		struct HWBP_HANDLE_INFO * hwbp_handle_info = (struct HWBP_HANDLE_INFO *)iter;
-		if (!hwbp_handle_info->task || hwbp_handle_info->task_id != task_pid_nr(task)) {
-			continue;
-		}
-		mutex_lock(&hwbp_handle_info->hit_lock);
-		if (hwbp_handle_info->step_pending) {
-			if (g_trace_enabled && hwbp_handle_info->trace_buf && hwbp_handle_info->trace_capacity) {
-				size_t idx = hwbp_handle_info->trace_head;
-				if (g_trace_mode == TRACE_MODE_FULL) {
-					struct TRACE_ITEM_FULL *items = (struct TRACE_ITEM_FULL *)hwbp_handle_info->trace_buf;
-					struct TRACE_ITEM_FULL *item = &items[idx];
-					item->task_id = hwbp_handle_info->task_id;
-					item->hit_time = ktime_get_real_seconds();
-					memcpy(&item->regs_info.regs, regs->regs, sizeof(item->regs_info.regs));
-					item->regs_info.sp = regs->sp;
-					item->regs_info.pc = regs->pc;
-					item->regs_info.pstate = regs->pstate;
-					item->regs_info.orig_x0 = regs->orig_x0;
-					item->regs_info.syscallno = regs->syscallno;
-					item->esr = esr;
-					item->far = read_sysreg(far_el1);
-					item->insn = 0;
-					rwpm_force_read_task(hwbp_handle_info->task, regs->pc, &item->insn, sizeof(item->insn));
-				} else {
-					struct TRACE_ITEM_PC *items = (struct TRACE_ITEM_PC *)hwbp_handle_info->trace_buf;
-					struct TRACE_ITEM_PC *item = &items[idx];
-					item->task_id = hwbp_handle_info->task_id;
-					item->hit_time = ktime_get_real_seconds();
-					item->pc = regs->pc;
-					item->pstate = regs->pstate;
-					item->esr = esr;
-					item->far = read_sysreg(far_el1);
-					item->insn = 0;
-					rwpm_force_read_task(hwbp_handle_info->task, regs->pc, &item->insn, sizeof(item->insn));
-				}
-				hwbp_handle_info->trace_head = (idx + 1) % hwbp_handle_info->trace_capacity;
-				if (hwbp_handle_info->trace_count < hwbp_handle_info->trace_capacity) {
-					hwbp_handle_info->trace_count++;
-				}
-			}
-			if (hwbp_handle_info->step_remaining > 0) {
-				hwbp_handle_info->step_remaining--;
-			}
-			if (hwbp_handle_info->step_remaining > 0) {
-				// some kernels clear single-step on exception, re-enable for next step
-				x_user_enable_single_step(task);
-				handled = DBG_HOOK_HANDLED;
-				mutex_unlock(&hwbp_handle_info->hit_lock);
-				break;
-			}
-			hwbp_handle_info->step_pending = false;
-			x_user_disable_single_step(task);
-			if (hwbp_handle_info->sample_hbp) {
-				if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &hwbp_handle_info->original_attr)) {
-					toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 1);
-				}
-			}
-			handled = DBG_HOOK_HANDLED;
-		}
-		mutex_unlock(&hwbp_handle_info->hit_lock);
-		break;
-	}
-	mutex_unlock(&g_hwbp_handle_info_mutex);
-	return handled;
-}
-#endif
 
 /*
  * Handle hitting a HW-breakpoint.
@@ -1112,27 +1033,12 @@ int hwbp_init(void) {
 	start_anti_ptrace_detection(&g_hwbp_handle_info_mutex, &g_hwbp_handle_info_arr);
 #endif
 
-#ifdef CONFIG_USE_SINGLE_STEP_MODE
-	g_step_hook.fn = hwbp_step_hook;
-	if (x_register_step_hook(&g_step_hook) == 0) {
-		g_step_hook_installed = true;
-	} else {
-		printk_debug(KERN_EMERG "register_step_hook failed, single-step disabled\n");
-	}
-#endif
 	return 0;
 }
 
 void hwbp_exit(void) {
 #ifdef CONFIG_ANTI_PTRACE_DETECTION_MODE
 	stop_anti_ptrace_detection();
-#endif
-
-#ifdef CONFIG_USE_SINGLE_STEP_MODE
-	if (g_step_hook_installed) {
-		x_unregister_step_hook(&g_step_hook);
-		g_step_hook_installed = false;
-	}
 #endif
 
 	clean_hwbp();

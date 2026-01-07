@@ -14,11 +14,8 @@
 // Disable kallsyms lookup (use exported symbols)
 #undef CONFIG_KALLSYMS_LOOKUP_NAME
 
-// Disable single-step hook mode (not present in this kernel tree)
-#undef CONFIG_USE_SINGLE_STEP_MODE
-
-// Keep hit-next mode optional (can be enabled if needed)
-#undef CONFIG_MODIFY_HIT_NEXT_MODE
+// Enable hit-next mode for simulate-step
+#define CONFIG_MODIFY_HIT_NEXT_MODE
 
 // Trace defaults
 #define CONFIG_TRACE_MAX_SIZE 8192
