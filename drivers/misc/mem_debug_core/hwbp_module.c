@@ -19,13 +19,15 @@ static bool g_trace_enabled = false;
 static int g_trace_mode = TRACE_MODE_PC;
 static size_t g_trace_capacity = CONFIG_TRACE_DEFAULT_SIZE;
 static size_t g_trace_step_count = CONFIG_TRACE_DEFAULT_STEP;
+static int g_step_filter_mode = STEP_FILTER_ALL;
 static DEFINE_SPINLOCK(g_step_log_lock);
 #define STEP_LOG_CAPACITY 8192
 static struct STEP_LOG_ITEM g_step_log[STEP_LOG_CAPACITY];
 static size_t g_step_log_head;
 static size_t g_step_log_count;
+static atomic64_t g_step_seq = ATOMIC_INIT(0);
 
-static __maybe_unused void step_log_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc)
+static __maybe_unused void step_log_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc, bool is_branch)
 {
 	unsigned long flags;
 	spin_lock_irqsave(&g_step_log_lock, flags);
@@ -33,7 +35,8 @@ static __maybe_unused void step_log_push(uint64_t tid, uint64_t pc, uint32_t ins
 	g_step_log[g_step_log_head].pc = pc;
 	g_step_log[g_step_log_head].next_pc = next_pc;
 	g_step_log[g_step_log_head].insn = insn;
-	g_step_log[g_step_log_head].reserved = 0;
+	g_step_log[g_step_log_head].flags = is_branch ? 1 : 0;
+	g_step_log[g_step_log_head].seq = atomic64_inc_return(&g_step_seq);
 	g_step_log_head = (g_step_log_head + 1) % STEP_LOG_CAPACITY;
 	if (g_step_log_count < STEP_LOG_CAPACITY)
 		g_step_log_count++;
@@ -45,6 +48,19 @@ static const size_t g_read_mem_max = 4096;
 static inline s64 sign_extend_64(u64 val, int bits) {
     u64 shift = 64 - (u64)bits;
     return (s64)((val << shift)) >> shift;
+}
+
+static inline bool is_branch_step(u64 pc, u64 next_pc) {
+	return next_pc != pc + 4;
+}
+
+static __maybe_unused void step_log_maybe_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc)
+{
+	bool is_branch = is_branch_step(pc, next_pc);
+	if (g_step_filter_mode == STEP_FILTER_BRANCH_ONLY && !is_branch) {
+		return;
+	}
+	step_log_push(tid, pc, insn, next_pc, is_branch);
 }
 
 static inline bool aarch64_cond_passed(u32 cond, u64 pstate) {
@@ -282,7 +298,7 @@ static void hwbp_handler(struct perf_event *bp,
 			if (read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn)) {
 				next_pc = calc_next_pc(regs, insn);
 			}
-			step_log_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
+			step_log_maybe_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
 			if (hwbp_handle_info->step_remaining > 0) {
 				hwbp_handle_info->step_remaining--;
 			}
@@ -339,7 +355,7 @@ static void hwbp_handler(struct perf_event *bp,
 				if (read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn)) {
 					next_pc = calc_next_pc(regs, insn);
 				}
-				step_log_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
+				step_log_maybe_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
 				printk(KERN_INFO "wuji_step pc=0x%llx insn=0x%08x next=0x%llx\n",
 				       (unsigned long long)regs->pc, insn, (unsigned long long)next_pc);
 			}
@@ -835,6 +851,11 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 	citerator iter;
 	g_simulate_step_enabled = enable;
 	if (enable) {
+		atomic64_set(&g_step_seq, 0);
+		spin_lock(&g_step_log_lock);
+		g_step_log_head = 0;
+		g_step_log_count = 0;
+		spin_unlock(&g_step_log_lock);
 		return 0;
 	}
 	mutex_lock(&g_hwbp_handle_info_mutex);
@@ -850,6 +871,15 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 		mutex_unlock(&info->hit_lock);
 	}
 	mutex_unlock(&g_hwbp_handle_info_mutex);
+	return 0;
+}
+
+static ssize_t OnCmdSetStepFilter(struct ioctl_request *hdr, char __user* buf) {
+	int mode = (int)hdr->param1;
+	if (mode != STEP_FILTER_ALL && mode != STEP_FILTER_BRANCH_ONLY) {
+		return -EINVAL;
+	}
+	g_step_filter_mode = mode;
 	return 0;
 }
 
@@ -1011,6 +1041,8 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdSetTraceStepCount(hdr, buf);
 	case CMD_HWBP_SET_STEP_SIMULATE:
 		return OnCmdSetStepSimulate(hdr, buf);
+	case CMD_HWBP_SET_STEP_FILTER:
+		return OnCmdSetStepFilter(hdr, buf);
 	case CMD_HWBP_GET_TRACE_COUNT:
 		return OnCmdGetTraceCount(hdr, buf);
 	case CMD_HWBP_GET_TRACE_DATA:

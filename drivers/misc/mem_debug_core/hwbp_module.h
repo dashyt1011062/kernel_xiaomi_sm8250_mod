@@ -48,6 +48,7 @@ enum {
 	CMD_HWBP_SET_TRACE_BUFFER_SIZE,		// 设置追踪缓冲大小
 	CMD_HWBP_SET_TRACE_STEP_COUNT,		// 设置追踪步数
 	CMD_HWBP_SET_STEP_SIMULATE,			// 指令模拟步进
+	CMD_HWBP_SET_STEP_FILTER,			// 设置步进指令过滤模式
 	CMD_HWBP_GET_TRACE_COUNT,			// 获取追踪记录数量
 	CMD_HWBP_GET_TRACE_DATA,				// 获取追踪记录数据
 	CMD_HWBP_GET_STEP_LOG,				// 获取模拟步进日志
@@ -80,6 +81,11 @@ enum {
 	TRACE_MODE_FULL = 1,
 };
 
+enum {
+	STEP_FILTER_ALL = 0,			// 记录所有指令
+	STEP_FILTER_BRANCH_ONLY = 1,	// 仅记录跳转/分支类指令
+};
+
 #pragma pack(1)
 struct TRACE_ITEM_PC {
 	uint64_t task_id;
@@ -106,7 +112,8 @@ struct STEP_LOG_ITEM {
 	uint64_t pc;
 	uint64_t next_pc;
 	uint32_t insn;
-	uint32_t reserved;
+	uint32_t flags;		// bit0: 是分支指令
+	uint64_t seq;		// 单调递增序号
 };
 #pragma pack()
 struct HWBP_HANDLE_INFO {
