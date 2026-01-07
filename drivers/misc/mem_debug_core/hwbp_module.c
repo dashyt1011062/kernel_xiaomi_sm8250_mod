@@ -742,7 +742,12 @@ static ssize_t OnCmdSetHookPc(struct ioctl_request *hdr, char __user* buf) {
 	uint64_t pc = hdr->param1;
 	printk_debug(KERN_INFO "CMD_SET_HOOK_PC\n");
 	printk_debug(KERN_INFO "pc:%px\n", pc);
-	if (!pc || pc >= TASK_SIZE) {
+	/* pc==0 用于取消 hook */
+	if (pc == 0) {
+		atomic64_set(&g_hook_pc, 0);
+		return 0;
+	}
+	if (pc >= TASK_SIZE) {
 		return -EINVAL;
 	}
 	atomic64_set(&g_hook_pc, pc);
