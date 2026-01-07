@@ -6,6 +6,9 @@
 #include <asm/debug-monitors.h>
 #include <asm/sysreg.h>
 
+/* 强制禁用 CPU 单步路径，统一使用“修改下一指令地址”模拟步进 */
+#undef CONFIG_USE_SINGLE_STEP_MODE
+
 extern ssize_t rwpm_force_read_task(struct task_struct *task, size_t addr, void *dst, size_t size);
 //////////////////////////////////////////////////////////////////
 
