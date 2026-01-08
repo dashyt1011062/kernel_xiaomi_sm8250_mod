@@ -43,7 +43,7 @@ static __maybe_unused void step_log_push(uint64_t tid, uint64_t pc, uint32_t ins
 	spin_unlock_irqrestore(&g_step_log_lock, flags);
 }
 static bool g_simulate_step_enabled = false;
-static const size_t g_read_mem_max = 4096;
+static const size_t g_read_mem_max = (size_t)-1;
 
 static inline s64 sign_extend_64(u64 val, int bits) {
     u64 shift = 64 - (u64)bits;
