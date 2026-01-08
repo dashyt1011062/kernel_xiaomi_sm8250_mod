@@ -354,7 +354,7 @@ static inline ssize_t DispatchCommand(struct ioctl_request *hdr, char __user* bu
 }
 
 
-#define MEM_DEBUG_MAX_PAYLOAD (1024 * 1024)
+#define MEM_DEBUG_MAX_PAYLOAD ((size_t)-1)
 
 static long mem_debug_dispatch_buf(void __user *user_buf, size_t total_size)
 {
