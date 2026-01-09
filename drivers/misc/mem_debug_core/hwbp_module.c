@@ -508,15 +508,40 @@ static ssize_t OnCmdSetTracerPidHide(struct ioctl_request *hdr, char __user* buf
 	pid_t tgid = (pid_t)hdr->param1;
 	(void)buf;
 	if (tgid == 0) {
-		g_target_status_pid = 0;
-		uninstall_status_probe();
+		tracerpid_clear_all();
 		return 0;
 	}
-	g_target_status_pid = tgid;
 	if (!install_status_probe()) {
-		g_target_status_pid = 0;
 		return -EFAULT;
 	}
+	tracerpid_clear_all();
+	tracerpid_add_tid(tgid);
+	return 0;
+}
+
+static ssize_t OnCmdTracerPidAddTid(struct ioctl_request *hdr, char __user* buf) {
+	pid_t tid = (pid_t)hdr->param1;
+	(void)buf;
+	if (tid <= 0)
+		return -EINVAL;
+	if (!install_status_probe()) {
+		return -EFAULT;
+	}
+	return tracerpid_add_tid(tid);
+}
+
+static ssize_t OnCmdTracerPidDelTid(struct ioctl_request *hdr, char __user* buf) {
+	pid_t tid = (pid_t)hdr->param1;
+	(void)buf;
+	if (tid <= 0)
+		return -EINVAL;
+	return tracerpid_del_tid(tid);
+}
+
+static ssize_t OnCmdTracerPidClear(struct ioctl_request *hdr, char __user* buf) {
+	(void)hdr;
+	(void)buf;
+	tracerpid_clear_all();
 	return 0;
 }
 
@@ -1116,6 +1141,12 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdGetStepLog(hdr, buf);
 	case CMD_HWBP_SET_TRACERPID_HIDE:
 		return OnCmdSetTracerPidHide(hdr, buf);
+	case CMD_HWBP_TRACERPID_ADD_TID:
+		return OnCmdTracerPidAddTid(hdr, buf);
+	case CMD_HWBP_TRACERPID_DEL_TID:
+		return OnCmdTracerPidDelTid(hdr, buf);
+	case CMD_HWBP_TRACERPID_CLEAR:
+		return OnCmdTracerPidClear(hdr, buf);
 	case CMD_HWBP_HIDE_KERNEL_MODULE:
 		return OnCmdHideKernelModule(hdr, buf);
 	default:
@@ -1163,6 +1194,7 @@ static void clean_hwbp(void) {
 
 int hwbp_release(struct inode *inode, struct file *filp) {
 	clean_hwbp();
+	tracerpid_clear_all();
 	mutex_lock(&g_hwbp_handle_info_mutex);
 	g_hwbp_handle_info_arr = cvector_create(sizeof(struct HWBP_HANDLE_INFO));
 	mutex_unlock(&g_hwbp_handle_info_mutex);

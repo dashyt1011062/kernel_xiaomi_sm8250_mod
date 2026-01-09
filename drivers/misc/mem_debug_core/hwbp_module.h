@@ -54,7 +54,10 @@ enum {
 	CMD_HWBP_GET_TRACE_DATA,				// 获取追踪记录数据
 	CMD_HWBP_GET_STEP_LOG,				// 获取模拟步进日志
 	CMD_HWBP_THREAD_SNAPSHOT,			// 冻结线程并抓取寄存器+栈快照
-	CMD_HWBP_SET_TRACERPID_HIDE,		// 设置要隐藏 TracerPid 的 pid (tgid)，0 关闭
+	CMD_HWBP_SET_TRACERPID_HIDE,		// 设置要隐藏 TracerPid 的 pid (tgid)，0 关闭（兼容）
+	CMD_HWBP_TRACERPID_ADD_TID,		// 添加需要伪装的 tid
+	CMD_HWBP_TRACERPID_DEL_TID,		// 移除需要伪装的 tid
+	CMD_HWBP_TRACERPID_CLEAR,			// 清空伪装 tid 列表
 };
 
 int hwbp_init(void);
