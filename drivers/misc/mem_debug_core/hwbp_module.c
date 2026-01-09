@@ -13,6 +13,55 @@ extern ssize_t rwpm_force_read_task(struct task_struct *task, size_t addr, void 
 
 static atomic64_t g_hook_pc;
 
+// Driver log ring buffer
+#define DRIVER_LOG_CAP 65536
+static char g_driver_log_buf[DRIVER_LOG_CAP];
+static size_t g_driver_log_head;
+static size_t g_driver_log_len;
+static DEFINE_SPINLOCK(g_driver_log_lock);
+
+static void driver_log_write(const char *s, size_t len)
+{
+	unsigned long flags;
+	size_t cap = DRIVER_LOG_CAP;
+	size_t first;
+	if (!s || len == 0)
+		return;
+	if (len > cap) {
+		s += (len - cap);
+		len = cap;
+	}
+	spin_lock_irqsave(&g_driver_log_lock, flags);
+	first = cap - g_driver_log_head;
+	if (first > len)
+		first = len;
+	memcpy(g_driver_log_buf + g_driver_log_head, s, first);
+	if (len > first) {
+		memcpy(g_driver_log_buf, s + first, len - first);
+	}
+	g_driver_log_head = (g_driver_log_head + len) % cap;
+	if (g_driver_log_len + len >= cap)
+		g_driver_log_len = cap;
+	else
+		g_driver_log_len += len;
+	spin_unlock_irqrestore(&g_driver_log_lock, flags);
+}
+
+void drv_logf(const char *fmt, ...)
+{
+	va_list args;
+	char tmp[256];
+	int n;
+	if (!fmt) return;
+	va_start(args, fmt);
+	n = vsnprintf(tmp, sizeof(tmp), fmt, args);
+	va_end(args);
+	if (n <= 0) return;
+	if (n >= (int)sizeof(tmp)) n = (int)sizeof(tmp) - 1;
+	driver_log_write(tmp, (size_t)n);
+	if (tmp[n - 1] != '\n')
+		driver_log_write("\n", 1);
+}
 
 static struct mutex g_hwbp_handle_info_mutex;
 static cvector g_hwbp_handle_info_arr = NULL;
@@ -508,9 +557,11 @@ static ssize_t OnCmdSetTracerPidHide(struct ioctl_request *hdr, char __user* buf
 	pid_t tgid = (pid_t)hdr->param1;
 	(void)buf;
 	if (tgid == 0) {
+		printk_debug(KERN_INFO "TracerPid hide: clear\n");
 		tracerpid_clear_all();
 		return 0;
 	}
+	printk_debug(KERN_INFO "TracerPid hide: tgid=%d\n", tgid);
 	if (!install_status_probe()) {
 		return -EFAULT;
 	}
@@ -524,6 +575,7 @@ static ssize_t OnCmdTracerPidAddTid(struct ioctl_request *hdr, char __user* buf)
 	(void)buf;
 	if (tid <= 0)
 		return -EINVAL;
+	printk_debug(KERN_INFO "TracerPid add tid=%d\n", tid);
 	if (!install_status_probe()) {
 		return -EFAULT;
 	}
@@ -535,13 +587,62 @@ static ssize_t OnCmdTracerPidDelTid(struct ioctl_request *hdr, char __user* buf)
 	(void)buf;
 	if (tid <= 0)
 		return -EINVAL;
+	printk_debug(KERN_INFO "TracerPid del tid=%d\n", tid);
 	return tracerpid_del_tid(tid);
 }
 
 static ssize_t OnCmdTracerPidClear(struct ioctl_request *hdr, char __user* buf) {
 	(void)hdr;
 	(void)buf;
+	printk_debug(KERN_INFO "TracerPid clear\n");
 	tracerpid_clear_all();
+	return 0;
+}
+
+static ssize_t OnCmdGetDriverLog(struct ioctl_request *hdr, char __user* buf) {
+	unsigned long flags;
+	size_t cap = DRIVER_LOG_CAP;
+	size_t max_size = (size_t)hdr->param1;
+	size_t to_copy;
+	size_t start;
+	char *tmp;
+	if (!buf || max_size == 0)
+		return -EINVAL;
+	spin_lock_irqsave(&g_driver_log_lock, flags);
+	to_copy = g_driver_log_len;
+	if (to_copy > max_size)
+		to_copy = max_size;
+	start = (g_driver_log_head + cap - g_driver_log_len) % cap;
+	spin_unlock_irqrestore(&g_driver_log_lock, flags);
+	if (to_copy == 0)
+		return 0;
+	tmp = kmalloc(to_copy, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+	if (start + to_copy <= cap) {
+		memcpy(tmp, g_driver_log_buf + start, to_copy);
+	} else {
+		size_t first = cap - start;
+		memcpy(tmp, g_driver_log_buf + start, first);
+		memcpy(tmp + first, g_driver_log_buf, to_copy - first);
+	}
+	if (x_copy_to_user((void*)buf, tmp, to_copy)) {
+		kfree(tmp);
+		return -EFAULT;
+	}
+	kfree(tmp);
+	return (ssize_t)to_copy;
+}
+
+static ssize_t OnCmdClearDriverLog(struct ioctl_request *hdr, char __user* buf) {
+	unsigned long flags;
+	(void)hdr;
+	(void)buf;
+	spin_lock_irqsave(&g_driver_log_lock, flags);
+	g_driver_log_head = 0;
+	g_driver_log_len = 0;
+	memset(g_driver_log_buf, 0, sizeof(g_driver_log_buf));
+	spin_unlock_irqrestore(&g_driver_log_lock, flags);
 	return 0;
 }
 
@@ -1147,6 +1248,10 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdTracerPidDelTid(hdr, buf);
 	case CMD_HWBP_TRACERPID_CLEAR:
 		return OnCmdTracerPidClear(hdr, buf);
+	case CMD_HWBP_GET_DRIVER_LOG:
+		return OnCmdGetDriverLog(hdr, buf);
+	case CMD_HWBP_CLEAR_DRIVER_LOG:
+		return OnCmdClearDriverLog(hdr, buf);
 	case CMD_HWBP_HIDE_KERNEL_MODULE:
 		return OnCmdHideKernelModule(hdr, buf);
 	default:

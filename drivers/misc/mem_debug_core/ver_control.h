@@ -37,10 +37,11 @@
 #endif
 #endif
 
+void drv_logf(const char *fmt, ...);
 #ifdef CONFIG_DEBUG_PRINTK
 #define printk_debug printk
 #else
-static inline void printk_debug(char *fmt, ...) {}
+#define printk_debug drv_logf
 #endif
 
 #endif /* VERSION_CONTROL_H_ */

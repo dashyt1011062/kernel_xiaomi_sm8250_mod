@@ -58,6 +58,8 @@ enum {
 	CMD_HWBP_TRACERPID_ADD_TID,		// 添加需要伪装的 tid
 	CMD_HWBP_TRACERPID_DEL_TID,		// 移除需要伪装的 tid
 	CMD_HWBP_TRACERPID_CLEAR,			// 清空伪装 tid 列表
+	CMD_HWBP_GET_DRIVER_LOG,			// 读取驱动日志
+	CMD_HWBP_CLEAR_DRIVER_LOG,		// 清空驱动日志
 };
 
 int hwbp_init(void);
