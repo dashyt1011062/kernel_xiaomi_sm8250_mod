@@ -31,6 +31,7 @@ enum {
 	CMD_HWBP_OPEN_PROCESS = CMD_HWBP_BASE, 	// 打开进程
 	CMD_HWBP_CLOSE_PROCESS, 				// 关闭进程
 	CMD_HWBP_READ_PROCESS_MEM, 			// 读取进程内存
+	CMD_HWBP_WRITE_PROCESS_MEM,			// 写入进程内存
 	CMD_HWBP_READ_USER_INSN,				// 读取进程指令
 	CMD_HWBP_GET_NUM_BRPS, 				// 获取CPU硬件执行断点支持数量
 	CMD_HWBP_GET_NUM_WRPS, 				// 获取CPU硬件访问断点支持数量

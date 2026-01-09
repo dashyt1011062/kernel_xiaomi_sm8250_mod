@@ -1,4 +1,5 @@
 #include "hwbp_module.h"
+#include "phy_mem.h"
 #include "proc_pid.h"
 #include "api_proxy.h"
 #include "anti_ptrace_detection.h"
@@ -433,6 +434,51 @@ static ssize_t OnCmdReadProcessMem(struct ioctl_request *hdr, char __user* buf) 
 	}
 	kfree(kbuf);
 	return read_bytes;
+}
+
+static ssize_t OnCmdWriteProcessMem(struct ioctl_request *hdr, char __user* buf) {
+	struct pid * proc_pid_struct = (struct pid *)hdr->param1;
+	uint64_t addr = hdr->param2;
+	size_t size = hdr->buf_size;
+	size_t write_size = 0;
+
+	if (!proc_pid_struct || !addr || size == 0) {
+		return -EINVAL;
+	}
+
+	while (write_size < size) {
+		size_t phy_addr = 0;
+		size_t pfn_sz = 0;
+		pte_t *pte;
+		bool old_pte_can_write;
+		char *input_buf;
+
+		phy_addr = get_proc_phy_addr(proc_pid_struct, addr + write_size, &pte);
+		if (phy_addr == 0) {
+			break;
+		}
+
+		old_pte_can_write = is_pte_can_write(pte);
+		if (!old_pte_can_write) {
+			if (!change_pte_write_status(pte, true)) {
+				break;
+			}
+		}
+
+		pfn_sz = size_inside_page(phy_addr, ((size - write_size) > PAGE_SIZE) ? PAGE_SIZE : (size - write_size));
+		input_buf = (char *)((size_t)buf + write_size);
+		if (write_ram_physical_addr(phy_addr, input_buf, false, pfn_sz) == 0) {
+			if (!old_pte_can_write) {
+				change_pte_write_status(pte, false);
+			}
+			break;
+		}
+		if (!old_pte_can_write) {
+			change_pte_write_status(pte, false);
+		}
+		write_size += pfn_sz;
+	}
+	return write_size;
 }
 
 static ssize_t OnCmdReadUserInsn(struct ioctl_request *hdr, char __user* buf) {
@@ -1009,6 +1055,8 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdCloseProcess(hdr, buf);
 	case CMD_HWBP_READ_PROCESS_MEM:
 		return OnCmdReadProcessMem(hdr, buf);
+	case CMD_HWBP_WRITE_PROCESS_MEM:
+		return OnCmdWriteProcessMem(hdr, buf);
 	case CMD_HWBP_READ_USER_INSN:
 		return OnCmdReadUserInsn(hdr, buf);
 	case CMD_HWBP_GET_NUM_BRPS:
