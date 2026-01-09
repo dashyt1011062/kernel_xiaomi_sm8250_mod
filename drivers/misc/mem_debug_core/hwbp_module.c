@@ -3,6 +3,7 @@
 #include "proc_pid.h"
 #include "api_proxy.h"
 #include "anti_ptrace_detection.h"
+#include "anti_status_tracerpid.h"
 #include "rwpm_ioctl.h"
 #include <asm/debug-monitors.h>
 #include <asm/sysreg.h>
@@ -501,6 +502,22 @@ static ssize_t OnCmdReadUserInsn(struct ioctl_request *hdr, char __user* buf) {
 		return -EFAULT;
 	}
 	return sizeof(insn);
+}
+
+static ssize_t OnCmdSetTracerPidHide(struct ioctl_request *hdr, char __user* buf) {
+	pid_t tgid = (pid_t)hdr->param1;
+	(void)buf;
+	if (tgid == 0) {
+		g_target_status_pid = 0;
+		uninstall_status_probe();
+		return 0;
+	}
+	g_target_status_pid = tgid;
+	if (!install_status_probe()) {
+		g_target_status_pid = 0;
+		return -EFAULT;
+	}
+	return 0;
 }
 
 static ssize_t OnCmdGetCpuNumBrps(struct ioctl_request *hdr, char __user* buf) {
@@ -1097,6 +1114,8 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdGetTraceData(hdr, buf);
 	case CMD_HWBP_GET_STEP_LOG:
 		return OnCmdGetStepLog(hdr, buf);
+	case CMD_HWBP_SET_TRACERPID_HIDE:
+		return OnCmdSetTracerPidHide(hdr, buf);
 	case CMD_HWBP_HIDE_KERNEL_MODULE:
 		return OnCmdHideKernelModule(hdr, buf);
 	default:
