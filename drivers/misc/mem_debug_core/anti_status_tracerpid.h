@@ -14,10 +14,16 @@
 static pid_t g_target_status_pid = 0;
 static bool g_status_probe_enabled = false;
 
+struct status_probe_ctx {
+	struct seq_file *m;
+	struct task_struct *task;
+};
+
 /* entry: record task for target tgid */
 static int entry_proc_pid_status(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	struct task_struct *task = NULL;
+	struct status_probe_ctx *ctx;
 
 	if (!g_status_probe_enabled || g_target_status_pid == 0)
 		return 0;
@@ -29,7 +35,13 @@ static int entry_proc_pid_status(struct kretprobe_instance *ri, struct pt_regs *
 	if (!task || task->tgid != g_target_status_pid)
 		return 0;
 
-	*(struct task_struct **)ri->data = task;
+	ctx = (struct status_probe_ctx *)ri->data;
+	ctx->task = task;
+#if defined(CONFIG_ARM64)
+	ctx->m = (struct seq_file *)regs->regs[0];
+#else
+	ctx->m = NULL;
+#endif
 	return 0;
 }
 
@@ -40,20 +52,18 @@ static int ret_proc_pid_status(struct kretprobe_instance *ri, struct pt_regs *re
 	struct seq_file *m;
 	char *buf, *p;
 	size_t len;
+	const char *state_tag = "State:\t";
+	const char *state_val = "R (running)";
+	size_t state_len = strlen(state_val);
 
 	if (!g_status_probe_enabled || g_target_status_pid == 0)
 		return 0;
 
-	task = *(struct task_struct **)ri->data;
+	task = ((struct status_probe_ctx *)ri->data)->task;
 	if (!task || task->tgid != g_target_status_pid)
 		return 0;
 
-#if defined(CONFIG_ARM64)
-	/* On kretprobe return, x0 holds struct seq_file * */
-	m = (struct seq_file *)regs->regs[0];
-#else
-	m = NULL;
-#endif
+	m = ((struct status_probe_ctx *)ri->data)->m;
 	if (!m || !m->buf || m->count == 0)
 		return 0;
 
@@ -67,6 +77,21 @@ static int ret_proc_pid_status(struct kretprobe_instance *ri, struct pt_regs *re
 		if (*p >= '0' && *p <= '9')
 			*p = '0';
 		p++;
+	}
+
+	/* force State to running in status output */
+	p = strstr(buf, state_tag);
+	if (p) {
+		p += strlen(state_tag);
+		/* overwrite with "R (running)" then pad to newline */
+		if (p + state_len < buf + len) {
+			memcpy(p, state_val, state_len);
+			p += state_len;
+			while (p < buf + len && *p != '\n') {
+				*p = ' ';
+				p++;
+			}
+		}
 	}
 	return 0;
 }
@@ -86,7 +111,7 @@ static bool install_status_probe(void)
 	g_status_kretprobe.handler = ret_proc_pid_status;
 	g_status_kretprobe.entry_handler = entry_proc_pid_status;
 	g_status_kretprobe.maxactive = 20;
-	g_status_kretprobe.data_size = sizeof(struct task_struct *);
+	g_status_kretprobe.data_size = sizeof(struct status_probe_ctx);
 	g_status_kretprobe.kp.symbol_name = "proc_pid_status";
 	ret = register_kretprobe(&g_status_kretprobe);
 	if (ret) {
