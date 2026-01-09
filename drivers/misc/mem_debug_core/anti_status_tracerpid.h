@@ -234,7 +234,7 @@ static bool install_status_probe(void)
 	return true;
 }
 
-static void uninstall_status_probe(void)
+static __maybe_unused void uninstall_status_probe(void)
 {
 	if (!g_status_probe_enabled)
 		return;
