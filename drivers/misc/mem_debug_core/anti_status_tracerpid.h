@@ -19,6 +19,19 @@ struct status_probe_ctx {
 	struct task_struct *task;
 };
 
+static void *memmem_safe(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen)
+{
+	const char *h = (const char *)haystack;
+	size_t i;
+	if (!haystack || !needle || needlelen == 0 || haystacklen < needlelen)
+		return NULL;
+	for (i = 0; i + needlelen <= haystacklen; ++i) {
+		if (memcmp(h + i, needle, needlelen) == 0)
+			return (void *)(h + i);
+	}
+	return NULL;
+}
+
 /* entry: record task for target tgid */
 static int entry_proc_pid_status(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
@@ -36,6 +49,8 @@ static int entry_proc_pid_status(struct kretprobe_instance *ri, struct pt_regs *
 		return 0;
 
 	ctx = (struct status_probe_ctx *)ri->data;
+	ctx->task = NULL;
+	ctx->m = NULL;
 	ctx->task = task;
 #if defined(CONFIG_ARM64)
 	ctx->m = (struct seq_file *)regs->regs[0];
@@ -69,18 +84,22 @@ static int ret_proc_pid_status(struct kretprobe_instance *ri, struct pt_regs *re
 
 	buf = m->buf;
 	len = m->count;
-	p = strstr(buf, "TracerPid:\t");
+	p = memmem_safe(buf, len, "TracerPid:\t", strlen("TracerPid:\t"));
 	if (!p)
 		return 0;
 	p += strlen("TracerPid:\t");
+	/* write single '0', pad rest with spaces */
+	if (p < buf + len && *p != '\n') {
+		*p = '0';
+		p++;
+	}
 	while (p < buf + len && *p != '\n') {
-		if (*p >= '0' && *p <= '9')
-			*p = '0';
+		*p = ' ';
 		p++;
 	}
 
 	/* force State to running in status output */
-	p = strstr(buf, state_tag);
+	p = memmem_safe(buf, len, state_tag, strlen(state_tag));
 	if (p) {
 		p += strlen(state_tag);
 		/* overwrite with "R (running)" then pad to newline */
