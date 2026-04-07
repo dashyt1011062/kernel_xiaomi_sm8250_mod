@@ -68,6 +68,7 @@ static cvector g_hwbp_handle_info_arr = NULL;
 
 static size_t g_trace_step_count = CONFIG_TRACE_DEFAULT_STEP;
 static int g_step_filter_mode = STEP_FILTER_ALL;
+static atomic64_t g_step_budget_remaining = ATOMIC64_INIT(0);
 static DEFINE_SPINLOCK(g_step_log_lock);
 #define STEP_LOG_CAPACITY 8192
 static struct STEP_LOG_ITEM g_step_log[STEP_LOG_CAPACITY];
@@ -109,6 +110,41 @@ static __maybe_unused void step_log_maybe_push(uint64_t tid, uint64_t pc, uint32
 		return;
 	}
 	step_log_push(tid, pc, insn, next_pc, is_branch);
+}
+
+static void disable_step_simulation_for_all_handles_locked(struct HWBP_HANDLE_INFO *skip)
+{
+	citerator iter;
+	g_simulate_step_enabled = false;
+	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
+		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
+		if (info == skip) {
+			continue;
+		}
+		struct perf_event_attr disabled_attr;
+		mutex_lock(&info->hit_lock);
+		info->step_pending = false;
+		info->step_exhausted = true;
+		if (info->sample_hbp) {
+			disabled_attr = info->original_attr;
+			disabled_attr.disabled = 1;
+			if (info->sim_next_active) {
+				if (x_modify_user_hw_breakpoint(info->sample_hbp, &disabled_attr)) {
+#ifdef CONFIG_MODIFY_HIT_NEXT_MODE
+					toggle_bp_registers_directly(&disabled_attr, info->is_32bit_task, 1);
+#endif
+				}
+				info->sim_next_active = false;
+			} else {
+				if (x_modify_user_hw_breakpoint(info->sample_hbp, &disabled_attr)) {
+#ifdef CONFIG_MODIFY_HIT_NEXT_MODE
+					toggle_bp_registers_directly(&disabled_attr, info->is_32bit_task, 1);
+#endif
+				}
+			}
+		}
+		mutex_unlock(&info->hit_lock);
+	}
 }
 
 static inline bool aarch64_cond_passed(u32 cond, u64 pstate) {
@@ -296,8 +332,25 @@ static void hwbp_handler(struct perf_event *bp,
 		if (g_simulate_step_enabled &&
 		    hwbp_handle_info->task &&
 		    hwbp_handle_info->original_attr.bp_type == HW_BREAKPOINT_X) {
+			long budget_left;
 			u64 next_pc = regs->pc + 4;
 			u32 insn = 0;
+			budget_left = atomic64_dec_if_positive(&g_step_budget_remaining);
+			if (budget_left < 0) {
+				if (hwbp_handle_info->sample_hbp) {
+					struct perf_event_attr disabled_attr = hwbp_handle_info->original_attr;
+					disabled_attr.disabled = 1;
+					hwbp_handle_info->step_pending = false;
+					hwbp_handle_info->step_exhausted = true;
+					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &disabled_attr)) {
+						toggle_bp_registers_directly(&disabled_attr, hwbp_handle_info->is_32bit_task, 1);
+					}
+					hwbp_handle_info->sim_next_active = false;
+				}
+				disable_step_simulation_for_all_handles_locked(hwbp_handle_info);
+				mutex_unlock(&hwbp_handle_info->hit_lock);
+				continue;
+			}
 			if (!hwbp_handle_info->step_pending) {
 				hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
 				hwbp_handle_info->step_pending = true;
@@ -317,6 +370,16 @@ static void hwbp_handler(struct perf_event *bp,
 						toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 1);
 					}
 					hwbp_handle_info->sim_next_active = false;
+				}
+				if (budget_left == 0 && hwbp_handle_info->sample_hbp) {
+					struct perf_event_attr disabled_attr = hwbp_handle_info->original_attr;
+					disabled_attr.disabled = 1;
+					hwbp_handle_info->step_exhausted = true;
+					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &disabled_attr)) {
+						toggle_bp_registers_directly(&disabled_attr, hwbp_handle_info->is_32bit_task, 1);
+					}
+					hwbp_handle_info->sim_next_active = false;
+					disable_step_simulation_for_all_handles_locked(hwbp_handle_info);
 				}
 				mutex_unlock(&hwbp_handle_info->hit_lock);
 				continue;
@@ -654,6 +717,7 @@ static ssize_t OnCmdInstProcessHwbp(struct ioctl_request *hdr, char __user* buf)
 	hwbp_handle_info.original_attr.disabled = 0;
 	hwbp_handle_info.sim_next_active = false;
 	hwbp_handle_info.step_pending = false;
+	hwbp_handle_info.step_exhausted = false;
 	hwbp_handle_info.step_remaining = 0;
 
 	mutex_init(&hwbp_handle_info.hit_lock);
@@ -914,13 +978,25 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 	citerator iter;
 	g_simulate_step_enabled = enable;
 	if (enable) {
+		size_t budget = g_trace_step_count ? g_trace_step_count : 1;
 		atomic64_set(&g_step_seq, 0);
+		atomic64_set(&g_step_budget_remaining, (s64)budget);
 		spin_lock(&g_step_log_lock);
 		g_step_log_head = 0;
 		g_step_log_count = 0;
 		spin_unlock(&g_step_log_lock);
+		mutex_lock(&g_hwbp_handle_info_mutex);
+		for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
+			struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
+			mutex_lock(&info->hit_lock);
+			info->step_exhausted = false;
+			info->step_pending = false;
+			mutex_unlock(&info->hit_lock);
+		}
+		mutex_unlock(&g_hwbp_handle_info_mutex);
 		return 0;
 	}
+	atomic64_set(&g_step_budget_remaining, 0);
 	mutex_lock(&g_hwbp_handle_info_mutex);
 	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
 		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
@@ -931,6 +1007,7 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 			}
 			info->sim_next_active = false;
 		}
+		info->step_exhausted = false;
 		mutex_unlock(&info->hit_lock);
 	}
 	mutex_unlock(&g_hwbp_handle_info_mutex);

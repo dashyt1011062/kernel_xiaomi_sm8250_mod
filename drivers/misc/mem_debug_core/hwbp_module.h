@@ -107,6 +107,7 @@ struct HWBP_HANDLE_INFO {
 #endif
 	struct mutex hit_lock;
 	bool step_pending;
+	bool step_exhausted;
 	size_t step_remaining;
 	size_t hit_total_count;
 	cvector hit_item_arr;
