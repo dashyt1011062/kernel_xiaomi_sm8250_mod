@@ -115,13 +115,13 @@ static __maybe_unused void step_log_maybe_push(uint64_t tid, uint64_t pc, uint32
 static void disable_step_simulation_for_all_handles_locked(struct HWBP_HANDLE_INFO *skip)
 {
 	citerator iter;
+	struct perf_event_attr disabled_attr;
 	g_simulate_step_enabled = false;
 	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
 		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
 		if (info == skip) {
 			continue;
 		}
-		struct perf_event_attr disabled_attr;
 		mutex_lock(&info->hit_lock);
 		info->step_pending = false;
 		info->step_exhausted = true;
@@ -678,7 +678,6 @@ static ssize_t OnCmdGetCpuNumWrps(struct ioctl_request *hdr, char __user* buf) {
 
 static ssize_t OnCmdInstProcessHwbp(struct ioctl_request *hdr, char __user* buf) {
 	struct pid * proc_pid_struct = (struct pid *)hdr->param1;
-	citerator iter;
 	uint64_t proc_virt_addr = hdr->param2;
 	char hwbp_len  =  hdr->param3 & 0xFF;
 	char hwbp_type = (hdr->param3 >> 8) & 0xFF;
