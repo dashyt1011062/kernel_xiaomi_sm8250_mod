@@ -66,9 +66,6 @@ void drv_logf(const char *fmt, ...)
 static struct mutex g_hwbp_handle_info_mutex;
 static cvector g_hwbp_handle_info_arr = NULL;
 
-static bool g_trace_enabled = false;
-static int g_trace_mode = TRACE_MODE_PC;
-static size_t g_trace_capacity = CONFIG_TRACE_DEFAULT_SIZE;
 static size_t g_trace_step_count = CONFIG_TRACE_DEFAULT_STEP;
 static int g_step_filter_mode = STEP_FILTER_ALL;
 static DEFINE_SPINLOCK(g_step_log_lock);
@@ -229,46 +226,6 @@ static void record_hit_details(struct HWBP_HANDLE_INFO *info, struct pt_regs *re
 			cvector_pushback(info->hit_item_arr, &hit_item);
 		}
     }
-}
-
-static size_t trace_item_size(void) {
-	return (g_trace_mode == TRACE_MODE_FULL) ? sizeof(struct TRACE_ITEM_FULL) : sizeof(struct TRACE_ITEM_PC);
-}
-
-static void trace_buffer_free(struct HWBP_HANDLE_INFO *info) {
-	if (!info) return;
-	if (info->trace_buf) {
-		kfree(info->trace_buf);
-		info->trace_buf = NULL;
-	}
-	info->trace_capacity = 0;
-	info->trace_item_size = 0;
-	info->trace_head = 0;
-	info->trace_count = 0;
-}
-
-static int trace_buffer_alloc(struct HWBP_HANDLE_INFO *info) {
-	size_t item_size;
-	size_t cap;
-	void *buf;
-	if (!info) return -EINVAL;
-	if (!g_trace_enabled) return 0;
-	cap = g_trace_capacity;
-	if (cap == 0) return -EINVAL;
-	item_size = trace_item_size();
-	buf = kmalloc(item_size * cap, GFP_KERNEL);
-	if (!buf) return -ENOMEM;
-	info->trace_buf = buf;
-	info->trace_capacity = cap;
-	info->trace_item_size = item_size;
-	info->trace_head = 0;
-	info->trace_count = 0;
-	return 0;
-}
-
-static void trace_buffer_reset(struct HWBP_HANDLE_INFO *info) {
-	trace_buffer_free(info);
-	trace_buffer_alloc(info);
 }
 
 #ifdef CONFIG_MODIFY_HIT_NEXT_MODE
@@ -698,11 +655,6 @@ static ssize_t OnCmdInstProcessHwbp(struct ioctl_request *hdr, char __user* buf)
 	hwbp_handle_info.sim_next_active = false;
 	hwbp_handle_info.step_pending = false;
 	hwbp_handle_info.step_remaining = 0;
-	hwbp_handle_info.trace_buf = NULL;
-	hwbp_handle_info.trace_capacity = 0;
-	hwbp_handle_info.trace_item_size = 0;
-	hwbp_handle_info.trace_head = 0;
-	hwbp_handle_info.trace_count = 0;
 
 	mutex_init(&hwbp_handle_info.hit_lock);
 
@@ -717,20 +669,6 @@ static ssize_t OnCmdInstProcessHwbp(struct ioctl_request *hdr, char __user* buf)
 	mutex_lock(&g_hwbp_handle_info_mutex);
 	cvector_pushback(g_hwbp_handle_info_arr, &hwbp_handle_info);
 	mutex_unlock(&g_hwbp_handle_info_mutex);
-
-	if (g_trace_enabled) {
-		mutex_lock(&g_hwbp_handle_info_mutex);
-		for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
-			struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
-			if (info->sample_hbp == hwbp_handle_info.sample_hbp) {
-				mutex_lock(&info->hit_lock);
-				trace_buffer_reset(info);
-				mutex_unlock(&info->hit_lock);
-				break;
-			}
-		}
-		mutex_unlock(&g_hwbp_handle_info_mutex);
-	}
 
 	if (x_copy_to_user((void*)buf, &hwbp_handle_info.sample_hbp, sizeof(uint64_t))) {
 		return -EINVAL;
@@ -752,18 +690,17 @@ static ssize_t OnCmdUninstProcessHwbp(struct ioctl_request *hdr, char __user* bu
 	mutex_lock(&g_hwbp_handle_info_mutex);
 	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
 		struct HWBP_HANDLE_INFO * hwbp_handle_info = (struct HWBP_HANDLE_INFO *)iter;
-		if(hwbp_handle_info->sample_hbp == sample_hbp) {
-			mutex_lock(&hwbp_handle_info->hit_lock);
-			unreg_task = hwbp_handle_info->task;
-			hwbp_handle_info->task = NULL;
-			if(hwbp_handle_info->hit_item_arr) {
-				cvector_destroy(hwbp_handle_info->hit_item_arr);
-				hwbp_handle_info->hit_item_arr = NULL;
-			}
-			trace_buffer_free(hwbp_handle_info);
-			mutex_unlock(&hwbp_handle_info->hit_lock);
-			mutex_destroy(&hwbp_handle_info->hit_lock);
-			cvector_rm(g_hwbp_handle_info_arr, iter);
+			if(hwbp_handle_info->sample_hbp == sample_hbp) {
+				mutex_lock(&hwbp_handle_info->hit_lock);
+				unreg_task = hwbp_handle_info->task;
+				hwbp_handle_info->task = NULL;
+				if(hwbp_handle_info->hit_item_arr) {
+					cvector_destroy(hwbp_handle_info->hit_item_arr);
+					hwbp_handle_info->hit_item_arr = NULL;
+				}
+				mutex_unlock(&hwbp_handle_info->hit_lock);
+				mutex_destroy(&hwbp_handle_info->hit_lock);
+				cvector_rm(g_hwbp_handle_info_arr, iter);
 			found = true;
 			break;
 		}
@@ -963,69 +900,6 @@ static ssize_t OnCmdHideKernelModule(struct ioctl_request *hdr, char __user* buf
 	return -EOPNOTSUPP;
 }
 
-
-
-static ssize_t OnCmdSetTraceEnable(struct ioctl_request *hdr, char __user* buf) {
-	bool enable = hdr->param1 ? true : false;
-	citerator iter;
-	g_trace_enabled = enable;
-	mutex_lock(&g_hwbp_handle_info_mutex);
-	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
-		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
-		mutex_lock(&info->hit_lock);
-		if (enable) {
-			trace_buffer_reset(info);
-		} else {
-			trace_buffer_free(info);
-		}
-		mutex_unlock(&info->hit_lock);
-	}
-	mutex_unlock(&g_hwbp_handle_info_mutex);
-	return 0;
-}
-
-static ssize_t OnCmdSetTraceMode(struct ioctl_request *hdr, char __user* buf) {
-	int mode = (int)hdr->param1;
-	citerator iter;
-	if (mode != TRACE_MODE_PC && mode != TRACE_MODE_FULL) {
-		return -EINVAL;
-	}
-	g_trace_mode = mode;
-	if (!g_trace_enabled) {
-		return 0;
-	}
-	mutex_lock(&g_hwbp_handle_info_mutex);
-	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
-		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
-		mutex_lock(&info->hit_lock);
-		trace_buffer_reset(info);
-		mutex_unlock(&info->hit_lock);
-	}
-	mutex_unlock(&g_hwbp_handle_info_mutex);
-	return 0;
-}
-
-static ssize_t OnCmdSetTraceBufferSize(struct ioctl_request *hdr, char __user* buf) {
-	size_t size = (size_t)hdr->param1;
-	citerator iter;
-	if (size == 0 || size > CONFIG_TRACE_MAX_SIZE) {
-		return -EINVAL;
-	}
-	g_trace_capacity = size;
-	if (!g_trace_enabled) {
-		return 0;
-	}
-	mutex_lock(&g_hwbp_handle_info_mutex);
-	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
-		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
-		mutex_lock(&info->hit_lock);
-		trace_buffer_reset(info);
-		mutex_unlock(&info->hit_lock);
-	}
-	mutex_unlock(&g_hwbp_handle_info_mutex);
-	return 0;
-}
-
 static ssize_t OnCmdSetTraceStepCount(struct ioctl_request *hdr, char __user* buf) {
 	size_t count = (size_t)hdr->param1;
 	if (count == 0 || count > CONFIG_TRACE_MAX_STEP) {
@@ -1070,83 +944,6 @@ static ssize_t OnCmdSetStepFilter(struct ioctl_request *hdr, char __user* buf) {
 	}
 	g_step_filter_mode = mode;
 	return 0;
-}
-
-static ssize_t OnCmdGetTraceCount(struct ioctl_request *hdr, char __user* buf) {
-	#pragma pack(1)
-	struct trace_count_data {
-		uint64_t count;
-		uint64_t capacity;
-		uint64_t item_size;
-		uint64_t mode;
-	};
-	#pragma pack()
-	struct perf_event * sample_hbp = (struct perf_event *)hdr->param1;
-	struct trace_count_data out = {0};	
-	citerator iter;
-	if (!sample_hbp) return -EINVAL;
-	mutex_lock(&g_hwbp_handle_info_mutex);
-	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
-		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
-		if (info->sample_hbp == sample_hbp) {
-			mutex_lock(&info->hit_lock);
-			out.count = info->trace_count;
-			out.capacity = info->trace_capacity;
-			out.item_size = info->trace_item_size;
-			out.mode = g_trace_mode;
-			mutex_unlock(&info->hit_lock);
-			break;
-		}
-	}
-	mutex_unlock(&g_hwbp_handle_info_mutex);
-	if (x_copy_to_user((void*)buf, &out, sizeof(out))) {
-		return -EFAULT;
-	}
-	return 0;
-}
-
-static ssize_t OnCmdGetTraceData(struct ioctl_request *hdr, char __user* buf) {
-	struct perf_event *sample_hbp = (struct perf_event *)hdr->param1;
-	size_t size = hdr->buf_size;
-	citerator iter;
-	ssize_t copied = 0;
-	if (!sample_hbp || size == 0) return -EINVAL;
-	mutex_lock(&g_hwbp_handle_info_mutex);
-	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
-		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
-		if (info->sample_hbp == sample_hbp) {
-			mutex_lock(&info->hit_lock);
-			if (!info->trace_buf || info->trace_item_size == 0) {
-				mutex_unlock(&info->hit_lock);
-				mutex_unlock(&g_hwbp_handle_info_mutex);
-				return -EINVAL;
-			}
-			{
-				size_t count = info->trace_count;
-				size_t item_size = info->trace_item_size;
-				size_t max_items = size / item_size;
-				size_t to_copy = (count < max_items) ? count : max_items;
-				size_t start = (info->trace_head + info->trace_capacity - info->trace_count) % info->trace_capacity;
-				char *dst = (char *)buf;
-				char *src = (char *)info->trace_buf;
-				size_t i;
-				for (i = 0; i < to_copy; ++i) {
-					size_t idx = (start + i) % info->trace_capacity;
-					if (x_copy_to_user(dst + i * item_size, src + idx * item_size, item_size)) {
-						break;
-					}
-				}
-				copied = (ssize_t)i;
-				if (i == to_copy) {
-					info->trace_count = 0;
-				}
-			}
-			mutex_unlock(&info->hit_lock);
-			break;
-		}
-	}
-	mutex_unlock(&g_hwbp_handle_info_mutex);
-	return copied;
 }
 
 static ssize_t OnCmdGetStepLog(struct ioctl_request *hdr, char __user* buf) {
@@ -1222,22 +1019,12 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdClearHwbpHit(hdr, buf);
 	case CMD_HWBP_SET_HOOK_PC:
 		return OnCmdSetHookPc(hdr, buf);
-	case CMD_HWBP_SET_TRACE_ENABLE:
-		return OnCmdSetTraceEnable(hdr, buf);
-	case CMD_HWBP_SET_TRACE_MODE:
-		return OnCmdSetTraceMode(hdr, buf);
-	case CMD_HWBP_SET_TRACE_BUFFER_SIZE:
-		return OnCmdSetTraceBufferSize(hdr, buf);
 	case CMD_HWBP_SET_TRACE_STEP_COUNT:
 		return OnCmdSetTraceStepCount(hdr, buf);
 	case CMD_HWBP_SET_STEP_SIMULATE:
 		return OnCmdSetStepSimulate(hdr, buf);
 	case CMD_HWBP_SET_STEP_FILTER:
 		return OnCmdSetStepFilter(hdr, buf);
-	case CMD_HWBP_GET_TRACE_COUNT:
-		return OnCmdGetTraceCount(hdr, buf);
-	case CMD_HWBP_GET_TRACE_DATA:
-		return OnCmdGetTraceData(hdr, buf);
 	case CMD_HWBP_GET_STEP_LOG:
 		return OnCmdGetStepLog(hdr, buf);
 	case CMD_HWBP_SET_TRACERPID_HIDE:
@@ -1282,7 +1069,6 @@ static void clean_hwbp(void) {
 			cvector_destroy(hwbp_handle_info->hit_item_arr);
 			hwbp_handle_info->hit_item_arr = NULL;
 		}
-		trace_buffer_free(hwbp_handle_info);
 		mutex_unlock(&hwbp_handle_info->hit_lock);
 		mutex_destroy(&hwbp_handle_info->hit_lock);
 	}

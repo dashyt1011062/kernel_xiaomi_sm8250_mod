@@ -40,26 +40,21 @@ enum {
 	CMD_HWBP_SUSPEND_PROCESS_HWBP,		// 暂停进程硬件断点
 	CMD_HWBP_RESUME_PROCESS_HWBP,		// 恢复进程硬件断点
 	CMD_HWBP_GET_HWBP_HIT_COUNT,			// 获取硬件断点命中地址数量
-	CMD_HWBP_GET_HWBP_HIT_DETAIL,		// 获取硬件断点命中详细信息
+	CMD_HWBP_GET_HWBP_HIT_DETAIL,			// 获取硬件断点命中详细信息
 	CMD_HWBP_CLEAR_HWBP_HIT,				// 清空硬件断点命中缓存
-	CMD_HWBP_SET_HOOK_PC,				// 设置无条件Hook跳转
+	CMD_HWBP_SET_HOOK_PC,					// 设置无条件Hook跳转
 	CMD_HWBP_HIDE_KERNEL_MODULE,			// 隐藏驱动
-	CMD_HWBP_SET_TRACE_ENABLE,			// 开关代码追踪
-	CMD_HWBP_SET_TRACE_MODE,				// 设置追踪模式
-	CMD_HWBP_SET_TRACE_BUFFER_SIZE,		// 设置追踪缓冲大小
-	CMD_HWBP_SET_TRACE_STEP_COUNT,		// 设置追踪步数
+	CMD_HWBP_SET_TRACE_STEP_COUNT = 0x53,	// 设置追踪步数
 	CMD_HWBP_SET_STEP_SIMULATE,			// 指令模拟步进
-	CMD_HWBP_SET_STEP_FILTER,			// 设置步进指令过滤模式
-	CMD_HWBP_GET_TRACE_COUNT,			// 获取追踪记录数量
-	CMD_HWBP_GET_TRACE_DATA,				// 获取追踪记录数据
-	CMD_HWBP_GET_STEP_LOG,				// 获取模拟步进日志
-	CMD_HWBP_THREAD_SNAPSHOT,			// 冻结线程并抓取寄存器+栈快照
-	CMD_HWBP_SET_TRACERPID_HIDE,		// 设置要隐藏 TracerPid 的 pid (tgid)，0 关闭（兼容）
-	CMD_HWBP_TRACERPID_ADD_TID,		// 添加需要伪装的 tid
-	CMD_HWBP_TRACERPID_DEL_TID,		// 移除需要伪装的 tid
-	CMD_HWBP_TRACERPID_CLEAR,			// 清空伪装 tid 列表
-	CMD_HWBP_GET_DRIVER_LOG,			// 读取驱动日志
-	CMD_HWBP_CLEAR_DRIVER_LOG,		// 清空驱动日志
+	CMD_HWBP_SET_STEP_FILTER,				// 设置步进指令过滤模式
+	CMD_HWBP_GET_STEP_LOG = 0x58,			// 获取模拟步进日志
+	CMD_HWBP_THREAD_SNAPSHOT = 0x59,		// 冻结线程并抓取寄存器+栈快照
+	CMD_HWBP_SET_TRACERPID_HIDE = 0x5A,		// 设置要隐藏 TracerPid 的 pid (tgid)，0 关闭（兼容）
+	CMD_HWBP_TRACERPID_ADD_TID = 0x5B,		// 添加需要伪装的 tid
+	CMD_HWBP_TRACERPID_DEL_TID = 0x5C,		// 移除需要伪装的 tid
+	CMD_HWBP_TRACERPID_CLEAR = 0x5D,		// 清空伪装 tid 列表
+	CMD_HWBP_GET_DRIVER_LOG = 0x5E,			// 读取驱动日志
+	CMD_HWBP_CLEAR_DRIVER_LOG = 0x5F,		// 清空驱动日志
 };
 
 int hwbp_init(void);
@@ -85,34 +80,9 @@ struct HWBP_HIT_ITEM {
 #pragma pack()
 
 enum {
-	TRACE_MODE_PC = 0,
-	TRACE_MODE_FULL = 1,
-};
-
-enum {
 	STEP_FILTER_ALL = 0,			// 记录所有指令
 	STEP_FILTER_BRANCH_ONLY = 1,	// 仅记录跳转/分支类指令
 };
-
-#pragma pack(1)
-struct TRACE_ITEM_PC {
-	uint64_t task_id;
-	uint64_t hit_time;
-	uint64_t pc;
-	uint64_t pstate;
-	uint64_t far;
-	uint64_t esr;
-	uint32_t insn;
-};
-struct TRACE_ITEM_FULL {
-	uint64_t task_id;
-	uint64_t hit_time;
-	struct my_user_pt_regs regs_info;
-	uint64_t far;
-	uint64_t esr;
-	uint32_t insn;
-};
-#pragma pack()
 
 #pragma pack(1)
 struct STEP_LOG_ITEM {
@@ -140,11 +110,6 @@ struct HWBP_HANDLE_INFO {
 	size_t step_remaining;
 	size_t hit_total_count;
 	cvector hit_item_arr;
-	void *trace_buf;
-	size_t trace_capacity;
-	size_t trace_item_size;
-	size_t trace_head;
-	size_t trace_count;
 };
 
 #endif /* HWBP_MODULE_H_ */
