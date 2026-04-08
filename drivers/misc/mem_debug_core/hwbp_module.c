@@ -73,6 +73,7 @@ static DEFINE_SPINLOCK(g_step_log_lock);
 #define STEP_LOG_CAPACITY 8192
 static struct STEP_LOG_ITEM g_step_log[STEP_LOG_CAPACITY];
 static size_t g_step_log_head;
+static size_t g_step_log_tail;
 static size_t g_step_log_count;
 static atomic64_t g_step_seq = ATOMIC_INIT(0);
 
@@ -87,8 +88,11 @@ static __maybe_unused void step_log_push(uint64_t tid, uint64_t pc, uint32_t ins
 	g_step_log[g_step_log_head].flags = is_branch ? 1 : 0;
 	g_step_log[g_step_log_head].seq = atomic64_inc_return(&g_step_seq);
 	g_step_log_head = (g_step_log_head + 1) % STEP_LOG_CAPACITY;
-	if (g_step_log_count < STEP_LOG_CAPACITY)
+	if (g_step_log_count < STEP_LOG_CAPACITY) {
 		g_step_log_count++;
+	} else {
+		g_step_log_tail = (g_step_log_tail + 1) % STEP_LOG_CAPACITY;
+	}
 	spin_unlock_irqrestore(&g_step_log_lock, flags);
 }
 static bool g_simulate_step_enabled = false;
@@ -982,6 +986,7 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 		atomic64_set(&g_step_budget_remaining, (s64)budget);
 		spin_lock(&g_step_log_lock);
 		g_step_log_head = 0;
+		g_step_log_tail = 0;
 		g_step_log_count = 0;
 		spin_unlock(&g_step_log_lock);
 		mutex_lock(&g_hwbp_handle_info_mutex);
@@ -1037,7 +1042,7 @@ static ssize_t OnCmdGetStepLog(struct ioctl_request *hdr, char __user* buf) {
 	to_copy = g_step_log_count;
 	if (to_copy > max_items)
 		to_copy = max_items;
-	start = (g_step_log_head + STEP_LOG_CAPACITY - g_step_log_count) % STEP_LOG_CAPACITY;
+	start = g_step_log_tail;
 	spin_unlock_irqrestore(&g_step_log_lock, flags);
 
 	if (to_copy == 0)
@@ -1052,8 +1057,8 @@ static ssize_t OnCmdGetStepLog(struct ioctl_request *hdr, char __user* buf) {
 		size_t idx = (start + i) % STEP_LOG_CAPACITY;
 		memcpy(&tmp[i], &g_step_log[idx], sizeof(struct STEP_LOG_ITEM));
 	}
-	g_step_log_count = 0;
-	g_step_log_head = 0;
+	g_step_log_tail = (g_step_log_tail + to_copy) % STEP_LOG_CAPACITY;
+	g_step_log_count -= to_copy;
 	spin_unlock_irqrestore(&g_step_log_lock, flags);
 
 	if (x_copy_to_user((void*)buf, tmp, sizeof(struct STEP_LOG_ITEM) * to_copy)) {
