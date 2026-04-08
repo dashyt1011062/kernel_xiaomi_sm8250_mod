@@ -421,7 +421,7 @@ static void hwbp_handler(struct perf_event *bp,
 			if (!hwbp_handle_info->step_pending) {
 				hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
 				hwbp_handle_info->step_pending = true;
-				hwbp_handle_info->step_remaining = 1;
+				hwbp_handle_info->step_remaining = 0;
 			}
 			have_insn = read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn);
 			if (have_insn) {
@@ -470,10 +470,7 @@ static void hwbp_handler(struct perf_event *bp,
 				mutex_unlock(&hwbp_handle_info->hit_lock);
 				continue;
 			}
-			if (hwbp_handle_info->step_remaining > 0) {
-				hwbp_handle_info->step_remaining--;
-			}
-			if (budget_left == 0 || hwbp_handle_info->step_remaining == 0) {
+			if (budget_left == 0) {
 				hwbp_handle_info->step_pending = false;
 				if (hwbp_handle_info->sim_next_active && hwbp_handle_info->sample_hbp) {
 					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &hwbp_handle_info->original_attr)) {
