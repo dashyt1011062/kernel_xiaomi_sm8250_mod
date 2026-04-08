@@ -55,6 +55,8 @@ enum {
 	CMD_HWBP_TRACERPID_CLEAR = 0x5D,		// 清空伪装 tid 列表
 	CMD_HWBP_GET_DRIVER_LOG = 0x5E,			// 读取驱动日志
 	CMD_HWBP_CLEAR_DRIVER_LOG = 0x5F,		// 清空驱动日志
+	CMD_HWBP_START_STEP_SESSION = 0x60,		// 启动模拟步进会话
+	CMD_HWBP_GET_STEP_STATUS = 0x61,		// 获取模拟步进状态
 };
 
 int hwbp_init(void);
@@ -84,6 +86,16 @@ enum {
 	STEP_FILTER_BRANCH_ONLY = 1,	// 仅记录跳转/分支类指令
 };
 
+enum {
+	STEP_STOP_NONE = 0,
+	STEP_STOP_COUNT_REACHED = 1,
+	STEP_STOP_BUFFER_FULL = 2,
+	STEP_STOP_READ_INSN_FAILED = 3,
+	STEP_STOP_NEXT_PC_INVALID = 4,
+	STEP_STOP_BP_RESTORE_FAILED = 5,
+	STEP_STOP_MANUAL = 6,
+};
+
 #pragma pack(1)
 struct STEP_LOG_ITEM {
 	uint64_t task_id;
@@ -92,6 +104,17 @@ struct STEP_LOG_ITEM {
 	uint32_t insn;
 	uint32_t flags;		// bit0: 是分支指令
 	uint64_t seq;		// 单调递增序号
+};
+
+struct STEP_SESSION_STATUS {
+	uint32_t running;
+	uint32_t done;
+	uint32_t stop_reason;
+	uint32_t reserved;
+	uint64_t requested_steps;
+	uint64_t logged_steps;
+	uint64_t tracked_tid;
+	uint64_t next_seq;
 };
 #pragma pack()
 struct HWBP_HANDLE_INFO {

@@ -77,11 +77,61 @@ static size_t g_step_log_head;
 static size_t g_step_log_tail;
 static size_t g_step_log_count;
 static atomic64_t g_step_seq = ATOMIC_INIT(0);
+static bool g_step_session_running;
+static bool g_step_session_done;
+static u32 g_step_stop_reason;
+static size_t g_step_requested_count;
 
-static __maybe_unused void step_log_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc, bool is_branch)
+static void step_session_buffer_reset_locked(void)
+{
+	g_step_log_head = 0;
+	g_step_log_tail = 0;
+	g_step_log_count = 0;
+}
+
+static void step_session_mark_done(u32 reason)
 {
 	unsigned long flags;
 	spin_lock_irqsave(&g_step_log_lock, flags);
+	g_step_session_running = false;
+	g_step_session_done = true;
+	g_step_stop_reason = reason;
+	spin_unlock_irqrestore(&g_step_log_lock, flags);
+}
+
+static void step_session_start(size_t requested_steps)
+{
+	unsigned long flags;
+	spin_lock_irqsave(&g_step_log_lock, flags);
+	step_session_buffer_reset_locked();
+	g_step_session_running = true;
+	g_step_session_done = false;
+	g_step_stop_reason = STEP_STOP_NONE;
+	g_step_requested_count = requested_steps;
+	spin_unlock_irqrestore(&g_step_log_lock, flags);
+	atomic64_set(&g_step_seq, 0);
+	atomic64_set(&g_step_budget_remaining, (s64)requested_steps);
+	atomic64_set(&g_step_tracked_tid, -1);
+}
+
+static bool step_session_is_running(void)
+{
+	unsigned long flags;
+	bool running;
+	spin_lock_irqsave(&g_step_log_lock, flags);
+	running = g_step_session_running;
+	spin_unlock_irqrestore(&g_step_log_lock, flags);
+	return running;
+}
+
+static __maybe_unused bool step_log_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc, bool is_branch)
+{
+	unsigned long flags;
+	spin_lock_irqsave(&g_step_log_lock, flags);
+	if (g_step_log_count >= STEP_LOG_CAPACITY) {
+		spin_unlock_irqrestore(&g_step_log_lock, flags);
+		return false;
+	}
 	g_step_log[g_step_log_head].task_id = tid;
 	g_step_log[g_step_log_head].pc = pc;
 	g_step_log[g_step_log_head].next_pc = next_pc;
@@ -89,12 +139,9 @@ static __maybe_unused void step_log_push(uint64_t tid, uint64_t pc, uint32_t ins
 	g_step_log[g_step_log_head].flags = is_branch ? 1 : 0;
 	g_step_log[g_step_log_head].seq = atomic64_inc_return(&g_step_seq);
 	g_step_log_head = (g_step_log_head + 1) % STEP_LOG_CAPACITY;
-	if (g_step_log_count < STEP_LOG_CAPACITY) {
-		g_step_log_count++;
-	} else {
-		g_step_log_tail = (g_step_log_tail + 1) % STEP_LOG_CAPACITY;
-	}
+	g_step_log_count++;
 	spin_unlock_irqrestore(&g_step_log_lock, flags);
+	return true;
 }
 static bool g_simulate_step_enabled = false;
 static const size_t g_read_mem_max = (size_t)-1;
@@ -108,13 +155,13 @@ static inline bool is_branch_step(u64 pc, u64 next_pc) {
 	return next_pc != pc + 4;
 }
 
-static __maybe_unused void step_log_maybe_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc)
+static __maybe_unused bool step_log_maybe_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc)
 {
 	bool is_branch = is_branch_step(pc, next_pc);
 	if (g_step_filter_mode == STEP_FILTER_BRANCH_ONLY && !is_branch) {
-		return;
+		return true;
 	}
-	step_log_push(tid, pc, insn, next_pc, is_branch);
+	return step_log_push(tid, pc, insn, next_pc, is_branch);
 }
 
 static void disable_step_simulation_for_all_handles_locked(struct HWBP_HANDLE_INFO *skip)
@@ -335,12 +382,15 @@ static void hwbp_handler(struct perf_event *bp,
 		mutex_lock(&hwbp_handle_info->hit_lock);
 #ifdef CONFIG_MODIFY_HIT_NEXT_MODE
 		if (g_simulate_step_enabled &&
+		    step_session_is_running() &&
 		    hwbp_handle_info->task &&
 		    hwbp_handle_info->original_attr.bp_type == HW_BREAKPOINT_X) {
 			s64 tracked_tid;
 			long budget_left;
 			u64 next_pc = regs->pc + 4;
 			u32 insn = 0;
+			bool have_insn = false;
+			bool logged = false;
 			tracked_tid = atomic64_read(&g_step_tracked_tid);
 			if (tracked_tid < 0) {
 				tracked_tid = atomic64_cmpxchg(&g_step_tracked_tid, -1, (s64)hwbp_handle_info->task_id);
@@ -371,16 +421,59 @@ static void hwbp_handler(struct perf_event *bp,
 			if (!hwbp_handle_info->step_pending) {
 				hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
 				hwbp_handle_info->step_pending = true;
-				hwbp_handle_info->step_remaining = g_trace_step_count ? g_trace_step_count : 1;
+				hwbp_handle_info->step_remaining = 1;
 			}
-			if (read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn)) {
+			have_insn = read_user_insn_task(hwbp_handle_info->task, regs->pc, &insn);
+			if (have_insn) {
 				next_pc = calc_next_pc(regs, insn);
 			}
-			step_log_maybe_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
+			if (!have_insn) {
+				step_session_mark_done(STEP_STOP_READ_INSN_FAILED);
+				hwbp_handle_info->step_pending = false;
+				hwbp_handle_info->step_exhausted = true;
+				if (hwbp_handle_info->sim_next_active && hwbp_handle_info->sample_hbp) {
+					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &hwbp_handle_info->original_attr)) {
+						toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 1);
+					}
+					hwbp_handle_info->sim_next_active = false;
+				}
+				disable_step_simulation_for_all_handles_locked(hwbp_handle_info);
+				mutex_unlock(&hwbp_handle_info->hit_lock);
+				continue;
+			}
+			if (!next_pc) {
+				step_session_mark_done(STEP_STOP_NEXT_PC_INVALID);
+				hwbp_handle_info->step_pending = false;
+				hwbp_handle_info->step_exhausted = true;
+				if (hwbp_handle_info->sim_next_active && hwbp_handle_info->sample_hbp) {
+					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &hwbp_handle_info->original_attr)) {
+						toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 1);
+					}
+					hwbp_handle_info->sim_next_active = false;
+				}
+				disable_step_simulation_for_all_handles_locked(hwbp_handle_info);
+				mutex_unlock(&hwbp_handle_info->hit_lock);
+				continue;
+			}
+			logged = step_log_maybe_push(hwbp_handle_info->task_id, regs->pc, insn, next_pc);
+			if (!logged) {
+				step_session_mark_done(STEP_STOP_BUFFER_FULL);
+				hwbp_handle_info->step_pending = false;
+				hwbp_handle_info->step_exhausted = true;
+				if (hwbp_handle_info->sim_next_active && hwbp_handle_info->sample_hbp) {
+					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &hwbp_handle_info->original_attr)) {
+						toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 1);
+					}
+					hwbp_handle_info->sim_next_active = false;
+				}
+				disable_step_simulation_for_all_handles_locked(hwbp_handle_info);
+				mutex_unlock(&hwbp_handle_info->hit_lock);
+				continue;
+			}
 			if (hwbp_handle_info->step_remaining > 0) {
 				hwbp_handle_info->step_remaining--;
 			}
-			if (hwbp_handle_info->step_remaining == 0) {
+			if (budget_left == 0 || hwbp_handle_info->step_remaining == 0) {
 				hwbp_handle_info->step_pending = false;
 				if (hwbp_handle_info->sim_next_active && hwbp_handle_info->sample_hbp) {
 					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &hwbp_handle_info->original_attr)) {
@@ -392,6 +485,7 @@ static void hwbp_handler(struct perf_event *bp,
 					struct perf_event_attr disabled_attr = hwbp_handle_info->original_attr;
 					disabled_attr.disabled = 1;
 					hwbp_handle_info->step_exhausted = true;
+					step_session_mark_done(STEP_STOP_COUNT_REACHED);
 					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &disabled_attr)) {
 						toggle_bp_registers_directly(&disabled_attr, hwbp_handle_info->is_32bit_task, 1);
 					}
@@ -409,7 +503,9 @@ static void hwbp_handler(struct perf_event *bp,
 				new_attr.bp_type = HW_BREAKPOINT_X;
 				new_attr.disabled = 0;
 				if (x_modify_user_hw_breakpoint(bp, &new_attr)) {
+					step_session_mark_done(STEP_STOP_BP_RESTORE_FAILED);
 					toggle_bp_registers_directly(&hwbp_handle_info->original_attr, hwbp_handle_info->is_32bit_task, 0);
+					disable_step_simulation_for_all_handles_locked(hwbp_handle_info);
 					hwbp_handle_info->sim_next_active = false;
 				} else {
 					hwbp_handle_info->sim_next_attr = new_attr;
@@ -982,7 +1078,7 @@ static ssize_t OnCmdHideKernelModule(struct ioctl_request *hdr, char __user* buf
 
 static ssize_t OnCmdSetTraceStepCount(struct ioctl_request *hdr, char __user* buf) {
 	size_t count = (size_t)hdr->param1;
-	if (count == 0 || count > CONFIG_TRACE_MAX_STEP) {
+	if (count == 0 || count > STEP_LOG_CAPACITY) {
 		return -EINVAL;
 	}
 	g_trace_step_count = count;
@@ -994,15 +1090,7 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 	citerator iter;
 	g_simulate_step_enabled = enable;
 	if (enable) {
-		size_t budget = g_trace_step_count ? g_trace_step_count : 1;
-		atomic64_set(&g_step_seq, 0);
-		atomic64_set(&g_step_budget_remaining, (s64)budget);
-		atomic64_set(&g_step_tracked_tid, -1);
-		spin_lock(&g_step_log_lock);
-		g_step_log_head = 0;
-		g_step_log_tail = 0;
-		g_step_log_count = 0;
-		spin_unlock(&g_step_log_lock);
+		step_session_start(g_trace_step_count ? g_trace_step_count : 1);
 		mutex_lock(&g_hwbp_handle_info_mutex);
 		for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
 			struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
@@ -1016,6 +1104,7 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 	}
 	atomic64_set(&g_step_budget_remaining, 0);
 	atomic64_set(&g_step_tracked_tid, -1);
+	step_session_mark_done(STEP_STOP_MANUAL);
 	mutex_lock(&g_hwbp_handle_info_mutex);
 	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
 		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
@@ -1033,6 +1122,28 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 	return 0;
 }
 
+static ssize_t OnCmdStartStepSession(struct ioctl_request *hdr, char __user* buf) {
+	size_t requested = (size_t)hdr->param1;
+	citerator iter;
+	if (requested == 0 || requested > STEP_LOG_CAPACITY) {
+		return -EINVAL;
+	}
+	g_trace_step_count = requested;
+	g_simulate_step_enabled = true;
+	step_session_start(requested);
+	mutex_lock(&g_hwbp_handle_info_mutex);
+	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
+		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
+		mutex_lock(&info->hit_lock);
+		info->step_exhausted = false;
+		info->step_pending = false;
+		info->step_remaining = 0;
+		mutex_unlock(&info->hit_lock);
+	}
+	mutex_unlock(&g_hwbp_handle_info_mutex);
+	return 0;
+}
+
 static ssize_t OnCmdSetStepFilter(struct ioctl_request *hdr, char __user* buf) {
 	int mode = (int)hdr->param1;
 	if (mode != STEP_FILTER_ALL && mode != STEP_FILTER_BRANCH_ONLY) {
@@ -1042,38 +1153,56 @@ static ssize_t OnCmdSetStepFilter(struct ioctl_request *hdr, char __user* buf) {
 	return 0;
 }
 
+static ssize_t OnCmdGetStepStatus(struct ioctl_request *hdr, char __user* buf) {
+	unsigned long flags;
+	struct STEP_SESSION_STATUS status;
+	if (!buf || hdr->buf_size < sizeof(status)) {
+		return -EINVAL;
+	}
+	memset(&status, 0, sizeof(status));
+	spin_lock_irqsave(&g_step_log_lock, flags);
+	status.running = g_step_session_running ? 1 : 0;
+	status.done = g_step_session_done ? 1 : 0;
+	status.stop_reason = g_step_stop_reason;
+	status.requested_steps = g_step_requested_count;
+	status.logged_steps = g_step_log_count;
+	status.tracked_tid = (uint64_t)atomic64_read(&g_step_tracked_tid);
+	status.next_seq = (uint64_t)atomic64_read(&g_step_seq);
+	spin_unlock_irqrestore(&g_step_log_lock, flags);
+	if (x_copy_to_user((void*)buf, &status, sizeof(status))) {
+		return -EFAULT;
+	}
+	return (ssize_t)sizeof(status);
+}
+
 static ssize_t OnCmdGetStepLog(struct ioctl_request *hdr, char __user* buf) {
 	unsigned long flags;
 	size_t max_items;
 	size_t to_copy;
-	size_t start;
-	size_t i;
 	struct STEP_LOG_ITEM *tmp;
 	size_t size = hdr->buf_size;
 	if (!buf || size < sizeof(struct STEP_LOG_ITEM))
 		return -EINVAL;
 	max_items = size / sizeof(struct STEP_LOG_ITEM);
 	spin_lock_irqsave(&g_step_log_lock, flags);
+	if (!g_step_session_done) {
+		spin_unlock_irqrestore(&g_step_log_lock, flags);
+		return -EBUSY;
+	}
 	to_copy = g_step_log_count;
 	if (to_copy > max_items)
 		to_copy = max_items;
-	start = g_step_log_tail;
-	spin_unlock_irqrestore(&g_step_log_lock, flags);
-
-	if (to_copy == 0)
+	if (to_copy == 0) {
+		spin_unlock_irqrestore(&g_step_log_lock, flags);
 		return 0;
+	}
 
 	tmp = kmalloc(sizeof(struct STEP_LOG_ITEM) * to_copy, GFP_KERNEL);
-	if (!tmp)
+	if (!tmp) {
+		spin_unlock_irqrestore(&g_step_log_lock, flags);
 		return -ENOMEM;
-
-	spin_lock_irqsave(&g_step_log_lock, flags);
-	for (i = 0; i < to_copy; ++i) {
-		size_t idx = (start + i) % STEP_LOG_CAPACITY;
-		memcpy(&tmp[i], &g_step_log[idx], sizeof(struct STEP_LOG_ITEM));
 	}
-	g_step_log_tail = (g_step_log_tail + to_copy) % STEP_LOG_CAPACITY;
-	g_step_log_count -= to_copy;
+	memcpy(tmp, g_step_log, sizeof(struct STEP_LOG_ITEM) * to_copy);
 	spin_unlock_irqrestore(&g_step_log_lock, flags);
 
 	if (x_copy_to_user((void*)buf, tmp, sizeof(struct STEP_LOG_ITEM) * to_copy)) {
@@ -1123,6 +1252,10 @@ ssize_t hwbp_dispatch(struct ioctl_request *hdr, char __user* buf) {
 		return OnCmdSetStepFilter(hdr, buf);
 	case CMD_HWBP_GET_STEP_LOG:
 		return OnCmdGetStepLog(hdr, buf);
+	case CMD_HWBP_START_STEP_SESSION:
+		return OnCmdStartStepSession(hdr, buf);
+	case CMD_HWBP_GET_STEP_STATUS:
+		return OnCmdGetStepStatus(hdr, buf);
 	case CMD_HWBP_SET_TRACERPID_HIDE:
 		return OnCmdSetTracerPidHide(hdr, buf);
 	case CMD_HWBP_TRACERPID_ADD_TID:
