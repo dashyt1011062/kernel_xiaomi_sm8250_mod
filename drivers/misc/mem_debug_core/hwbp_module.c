@@ -69,6 +69,7 @@ static cvector g_hwbp_handle_info_arr = NULL;
 static size_t g_trace_step_count = CONFIG_TRACE_DEFAULT_STEP;
 static int g_step_filter_mode = STEP_FILTER_ALL;
 static atomic64_t g_step_budget_remaining = ATOMIC64_INIT(0);
+static atomic64_t g_step_tracked_tid = ATOMIC64_INIT(-1);
 static DEFINE_SPINLOCK(g_step_log_lock);
 #define STEP_LOG_CAPACITY 8192
 static struct STEP_LOG_ITEM g_step_log[STEP_LOG_CAPACITY];
@@ -336,9 +337,21 @@ static void hwbp_handler(struct perf_event *bp,
 		if (g_simulate_step_enabled &&
 		    hwbp_handle_info->task &&
 		    hwbp_handle_info->original_attr.bp_type == HW_BREAKPOINT_X) {
+			s64 tracked_tid;
 			long budget_left;
 			u64 next_pc = regs->pc + 4;
 			u32 insn = 0;
+			tracked_tid = atomic64_read(&g_step_tracked_tid);
+			if (tracked_tid < 0) {
+				tracked_tid = atomic64_cmpxchg(&g_step_tracked_tid, -1, (s64)hwbp_handle_info->task_id);
+				if (tracked_tid < 0) {
+					tracked_tid = (s64)hwbp_handle_info->task_id;
+				}
+			}
+			if ((u64)tracked_tid != hwbp_handle_info->task_id) {
+				mutex_unlock(&hwbp_handle_info->hit_lock);
+				continue;
+			}
 			budget_left = atomic64_dec_if_positive(&g_step_budget_remaining);
 			if (budget_left < 0) {
 				if (hwbp_handle_info->sample_hbp) {
@@ -984,6 +997,7 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 		size_t budget = g_trace_step_count ? g_trace_step_count : 1;
 		atomic64_set(&g_step_seq, 0);
 		atomic64_set(&g_step_budget_remaining, (s64)budget);
+		atomic64_set(&g_step_tracked_tid, -1);
 		spin_lock(&g_step_log_lock);
 		g_step_log_head = 0;
 		g_step_log_tail = 0;
@@ -1001,6 +1015,7 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 		return 0;
 	}
 	atomic64_set(&g_step_budget_remaining, 0);
+	atomic64_set(&g_step_tracked_tid, -1);
 	mutex_lock(&g_hwbp_handle_info_mutex);
 	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
 		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
