@@ -512,11 +512,6 @@ static void hwbp_handler(struct perf_event *bp,
 			mutex_unlock(&hwbp_handle_info->hit_lock);
 			continue;
 		}
-		if (hwbp_handle_info->original_attr.bp_type == HW_BREAKPOINT_X) {
-			hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
-			mutex_unlock(&hwbp_handle_info->hit_lock);
-			continue;
-		}
 		if(hwbp_handle_info->next_instruction_attr.bp_addr != regs->pc) {
 			// first hit
 			bool should_toggle = true;
