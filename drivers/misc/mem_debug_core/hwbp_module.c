@@ -652,7 +652,7 @@ static void hwbp_handler(struct perf_event *bp,
 			if (hwbp_handle_info->sample_hbp) {
 				struct perf_event_attr disabled_attr = hwbp_handle_info->original_attr;
 				disabled_attr.disabled = 1;
-				if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &disabled_attr)) {
+				if (!x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &disabled_attr)) {
 					disabled_ok = true;
 				} else if (toggle_bp_registers_directly(&disabled_attr, hwbp_handle_info->is_32bit_task, 0)) {
 					disabled_ok = true;
