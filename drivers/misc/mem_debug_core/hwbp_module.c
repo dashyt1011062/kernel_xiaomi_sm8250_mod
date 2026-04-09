@@ -7,6 +7,9 @@
 #include "rwpm_ioctl.h"
 #include <asm/debug-monitors.h>
 #include <asm/sysreg.h>
+#include <linux/ptrace.h>
+#include <linux/list.h>
+#include <linux/spinlock.h>
 
 extern ssize_t rwpm_force_read_task(struct task_struct *task, size_t addr, void *dst, size_t size);
 //////////////////////////////////////////////////////////////////
@@ -65,6 +68,20 @@ void drv_logf(const char *fmt, ...)
 
 static struct mutex g_hwbp_handle_info_mutex;
 static cvector g_hwbp_handle_info_arr = NULL;
+static DEFINE_SPINLOCK(g_bp_restore_lock);
+
+struct bp_step_restore_item {
+	struct list_head node;
+	struct HWBP_HANDLE_INFO *info;
+	struct perf_event *bp;
+	struct perf_event_attr original_attr;
+	struct task_struct *task;
+	bool is_32bit_task;
+};
+
+static LIST_HEAD(g_bp_restore_list);
+static struct step_hook g_bp_step_hook;
+static int hwbp_single_step_restore_hook(struct pt_regs *regs, unsigned int esr);
 
 static size_t g_trace_step_count = CONFIG_TRACE_DEFAULT_STEP;
 static int g_step_filter_mode = STEP_FILTER_ALL;
@@ -122,6 +139,123 @@ static bool step_session_is_running(void)
 	running = g_step_session_running;
 	spin_unlock_irqrestore(&g_step_log_lock, flags);
 	return running;
+}
+
+static bool hwbp_queue_single_step_restore(struct HWBP_HANDLE_INFO *info)
+{
+	struct bp_step_restore_item *item;
+	unsigned long flags;
+
+	if (!info || info->bp_restore_pending) {
+		return true;
+	}
+
+	item = kmalloc(sizeof(*item), GFP_ATOMIC);
+	if (!item) {
+		return false;
+	}
+
+	item->info = info;
+	item->bp = info->sample_hbp;
+	item->original_attr = info->original_attr;
+	item->task = info->task;
+	get_task_struct(item->task);
+	item->is_32bit_task = info->is_32bit_task;
+	spin_lock_irqsave(&g_bp_restore_lock, flags);
+	if (info->bp_restore_pending) {
+		spin_unlock_irqrestore(&g_bp_restore_lock, flags);
+		put_task_struct(item->task);
+		kfree(item);
+		return true;
+	}
+	info->bp_restore_pending = true;
+	list_add_tail(&item->node, &g_bp_restore_list);
+	spin_unlock_irqrestore(&g_bp_restore_lock, flags);
+	return true;
+}
+
+static void hwbp_clear_single_step_restore(struct HWBP_HANDLE_INFO *info)
+{
+	struct bp_step_restore_item *item, *tmp;
+	unsigned long flags;
+
+	if (!info) {
+		return;
+	}
+
+	spin_lock_irqsave(&g_bp_restore_lock, flags);
+	list_for_each_entry_safe(item, tmp, &g_bp_restore_list, node) {
+		if (item->info != info) {
+			continue;
+		}
+		list_del(&item->node);
+		info->bp_restore_pending = false;
+		spin_unlock_irqrestore(&g_bp_restore_lock, flags);
+		put_task_struct(item->task);
+		kfree(item);
+		return;
+	}
+	info->bp_restore_pending = false;
+	spin_unlock_irqrestore(&g_bp_restore_lock, flags);
+}
+
+static void hwbp_clear_all_single_step_restores(void)
+{
+	struct bp_step_restore_item *item, *tmp;
+	unsigned long flags;
+
+	spin_lock_irqsave(&g_bp_restore_lock, flags);
+	list_for_each_entry_safe(item, tmp, &g_bp_restore_list, node) {
+		list_del(&item->node);
+		if (item->info) {
+			item->info->bp_restore_pending = false;
+		}
+		if (item->task) {
+			put_task_struct(item->task);
+		}
+		kfree(item);
+	}
+	spin_unlock_irqrestore(&g_bp_restore_lock, flags);
+}
+
+static int hwbp_single_step_restore_hook(struct pt_regs *regs, unsigned int esr)
+{
+	struct bp_step_restore_item *item, *tmp;
+	unsigned long flags;
+	bool found = false;
+
+	if (!user_mode(regs)) {
+		return DBG_HOOK_ERROR;
+	}
+
+	spin_lock_irqsave(&g_bp_restore_lock, flags);
+	list_for_each_entry_safe(item, tmp, &g_bp_restore_list, node) {
+		if (!item->task || item->task != current) {
+			continue;
+		}
+		list_del(&item->node);
+		if (item->info) {
+			item->info->bp_restore_pending = false;
+		}
+		if (item->bp) {
+			struct perf_event_attr restore_attr = item->original_attr;
+			restore_attr.disabled = 0;
+			if (x_modify_user_hw_breakpoint(item->bp, &restore_attr)) {
+				toggle_bp_registers_directly(&restore_attr, item->is_32bit_task, 1);
+			}
+		}
+		put_task_struct(item->task);
+		kfree(item);
+		found = true;
+	}
+	spin_unlock_irqrestore(&g_bp_restore_lock, flags);
+
+	if (!found) {
+		return DBG_HOOK_ERROR;
+	}
+
+	user_disable_single_step(current);
+	return DBG_HOOK_HANDLED;
 }
 
 static __maybe_unused bool step_log_push(uint64_t tid, uint64_t pc, uint32_t insn, uint64_t next_pc, bool is_branch)
@@ -512,6 +646,32 @@ static void hwbp_handler(struct perf_event *bp,
 			mutex_unlock(&hwbp_handle_info->hit_lock);
 			continue;
 		}
+		if (hwbp_handle_info->original_attr.bp_type == HW_BREAKPOINT_X) {
+			bool disabled_ok = false;
+			hwbp_hit_user_info_callback(bp, data, regs, hwbp_handle_info);
+			if (hwbp_handle_info->sample_hbp) {
+				struct perf_event_attr disabled_attr = hwbp_handle_info->original_attr;
+				disabled_attr.disabled = 1;
+				if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &disabled_attr)) {
+					disabled_ok = true;
+				} else if (toggle_bp_registers_directly(&disabled_attr, hwbp_handle_info->is_32bit_task, 0)) {
+					disabled_ok = true;
+				}
+			}
+			if (disabled_ok) {
+				if (!hwbp_queue_single_step_restore(hwbp_handle_info)) {
+					struct perf_event_attr restore_attr = hwbp_handle_info->original_attr;
+					restore_attr.disabled = 0;
+					if (x_modify_user_hw_breakpoint(hwbp_handle_info->sample_hbp, &restore_attr)) {
+						toggle_bp_registers_directly(&restore_attr, hwbp_handle_info->is_32bit_task, 1);
+					}
+				} else {
+					user_enable_single_step(current);
+				}
+			}
+			mutex_unlock(&hwbp_handle_info->hit_lock);
+			continue;
+		}
 		if(hwbp_handle_info->next_instruction_attr.bp_addr != regs->pc) {
 			// first hit
 			bool should_toggle = true;
@@ -827,6 +987,7 @@ static ssize_t OnCmdInstProcessHwbp(struct ioctl_request *hdr, char __user* buf)
 	hwbp_handle_info.sim_next_active = false;
 	hwbp_handle_info.step_pending = false;
 	hwbp_handle_info.step_exhausted = false;
+	hwbp_handle_info.bp_restore_pending = false;
 	hwbp_handle_info.step_remaining = 0;
 
 	mutex_init(&hwbp_handle_info.hit_lock);
@@ -865,6 +1026,7 @@ static ssize_t OnCmdUninstProcessHwbp(struct ioctl_request *hdr, char __user* bu
 		struct HWBP_HANDLE_INFO * hwbp_handle_info = (struct HWBP_HANDLE_INFO *)iter;
 			if(hwbp_handle_info->sample_hbp == sample_hbp) {
 				mutex_lock(&hwbp_handle_info->hit_lock);
+				hwbp_clear_single_step_restore(hwbp_handle_info);
 				unreg_task = hwbp_handle_info->task;
 				hwbp_handle_info->task = NULL;
 				if(hwbp_handle_info->hit_item_arr) {
@@ -1087,6 +1249,7 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 	citerator iter;
 	g_simulate_step_enabled = enable;
 	if (enable) {
+		hwbp_clear_all_single_step_restores();
 		step_session_start(g_trace_step_count ? g_trace_step_count : 1);
 		mutex_lock(&g_hwbp_handle_info_mutex);
 		for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
@@ -1102,6 +1265,7 @@ static ssize_t OnCmdSetStepSimulate(struct ioctl_request *hdr, char __user* buf)
 	atomic64_set(&g_step_budget_remaining, 0);
 	atomic64_set(&g_step_tracked_tid, -1);
 	step_session_mark_done(STEP_STOP_MANUAL);
+	hwbp_clear_all_single_step_restores();
 	mutex_lock(&g_hwbp_handle_info_mutex);
 	for (iter = cvector_begin(g_hwbp_handle_info_arr); iter != cvector_end(g_hwbp_handle_info_arr); iter = cvector_next(g_hwbp_handle_info_arr, iter)) {
 		struct HWBP_HANDLE_INFO *info = (struct HWBP_HANDLE_INFO *)iter;
@@ -1125,6 +1289,7 @@ static ssize_t OnCmdStartStepSession(struct ioctl_request *hdr, char __user* buf
 	if (requested == 0 || requested > STEP_LOG_CAPACITY) {
 		return -EINVAL;
 	}
+	hwbp_clear_all_single_step_restores();
 	g_trace_step_count = requested;
 	g_simulate_step_enabled = true;
 	step_session_start(requested);
@@ -1287,6 +1452,7 @@ static void clean_hwbp(void) {
 			hwbp_handle_info->sample_hbp = NULL;
 		}
 		mutex_lock(&hwbp_handle_info->hit_lock);
+		hwbp_clear_single_step_restore(hwbp_handle_info);
 		if (hwbp_handle_info->task) {
 			put_task_struct(hwbp_handle_info->task);
 			hwbp_handle_info->task = NULL;
@@ -1301,6 +1467,7 @@ static void clean_hwbp(void) {
 	cvector_destroy(g_hwbp_handle_info_arr);
 	g_hwbp_handle_info_arr = NULL;
 	mutex_unlock(&g_hwbp_handle_info_mutex);
+	hwbp_clear_all_single_step_restores();
 	
 	for (iter = cvector_begin(wait_unregister_bp_arr); iter != cvector_end(wait_unregister_bp_arr); iter = cvector_next(wait_unregister_bp_arr, iter)) {
 	  struct perf_event * bp = *(struct perf_event **)iter;
@@ -1327,6 +1494,8 @@ int hwbp_init(void) {
 #endif
 	g_hwbp_handle_info_arr = cvector_create(sizeof(struct HWBP_HANDLE_INFO));
 	mutex_init(&g_hwbp_handle_info_mutex);
+	g_bp_step_hook.fn = hwbp_single_step_restore_hook;
+	register_step_hook(&g_bp_step_hook);
 
 #ifdef CONFIG_ANTI_PTRACE_DETECTION_MODE
 	start_anti_ptrace_detection(&g_hwbp_handle_info_mutex, &g_hwbp_handle_info_arr);
@@ -1339,6 +1508,7 @@ void hwbp_exit(void) {
 #ifdef CONFIG_ANTI_PTRACE_DETECTION_MODE
 	stop_anti_ptrace_detection();
 #endif
+	unregister_step_hook(&g_bp_step_hook);
 
 	clean_hwbp();
 	
