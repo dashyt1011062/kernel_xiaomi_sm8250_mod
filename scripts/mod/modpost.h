@@ -12,6 +12,23 @@
 
 #include "elfconfig.h"
 
+/*
+ * Bionic's elf.h pulls in linux/elf.h, where ELF64_ST_BIND/TYPE are defined
+ * in terms of ELF_ST_BIND/TYPE. After this file undefines and remaps
+ * ELF_ST_BIND/TYPE to match the kernel ELF class, those bionic macros can
+ * collapse into unresolved symbol-like tokens during host-tool linking.
+ */
+#if defined(__ANDROID__)
+#undef ELF32_ST_BIND
+#undef ELF32_ST_TYPE
+#undef ELF64_ST_BIND
+#undef ELF64_ST_TYPE
+#define ELF32_ST_BIND(val) (((unsigned char)(val)) >> 4)
+#define ELF32_ST_TYPE(val) ((val) & 0xf)
+#define ELF64_ST_BIND(val) ELF32_ST_BIND(val)
+#define ELF64_ST_TYPE(val) ELF32_ST_TYPE(val)
+#endif
+
 /* On BSD-alike OSes elf.h defines these according to host's word size */
 #undef ELF_ST_BIND
 #undef ELF_ST_TYPE
