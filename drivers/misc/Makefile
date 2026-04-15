@@ -84,4 +84,3 @@ obj-$(CONFIG_MOTOR_DRV8846)	+= drv8846.o
 obj-$(CONFIG_SPI_XIAOMI_TP)	+= spi-xiaomi-tp.o
 obj-$(CONFIG_MMHARDWARE_OTHER_DETECTION) += mmhardware_others.o
 obj-$(CONFIG_PERF_HELPER)	+= perf_helper.o
-obj-$(CONFIG_MEM_DEBUG_CORE)	+= mem_debug_core/
