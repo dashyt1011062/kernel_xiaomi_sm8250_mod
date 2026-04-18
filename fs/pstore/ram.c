@@ -36,6 +36,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/memblock.h>
+#include <linux/sizes.h>
 
 #define RAMOOPS_KERNMSG_HDR "===="
 #define MIN_MEM_SIZE 4096UL
@@ -980,6 +981,45 @@ static struct platform_device ramoops_dev  = {
 	},
 };
 
+static void __init ramoops_memreserve_set_default_layout(
+		struct ramoops_platform_data *pdata)
+{
+	unsigned long record_sz;
+	unsigned long console_sz;
+	unsigned long pmsg_sz;
+
+	/*
+	 * Reserve a dedicated DMESG area instead of spending the whole buffer
+	 * on console/pmsg. With the old layout record_size stayed 0, so panic
+	 * dumps were never created.
+	 *
+	 * 4 MiB reserve now defaults to:
+	 *   record_size  = 128 KiB
+	 *   console_size = 128 KiB
+	 *   pmsg_size    = 128 KiB
+	 * leaving 0x3c0000 bytes for 30 DMESG records.
+	 */
+	record_sz = (pdata->mem_size / 4) & PAGE_MASK;
+	console_sz = (pdata->mem_size / 8) & PAGE_MASK;
+	pmsg_sz = (pdata->mem_size / 8) & PAGE_MASK;
+
+	record_sz = min(record_sz, (unsigned long)SZ_128K);
+	console_sz = min(console_sz, (unsigned long)SZ_128K);
+	pmsg_sz = min(pmsg_sz, (unsigned long)SZ_128K);
+
+	if (record_sz < MIN_MEM_SIZE)
+		record_sz = 0;
+	if (console_sz < MIN_MEM_SIZE)
+		console_sz = 0;
+	if (pmsg_sz < MIN_MEM_SIZE)
+		pmsg_sz = 0;
+
+	pdata->record_size = record_sz;
+	pdata->console_size = console_sz;
+	pdata->pmsg_size = pmsg_sz;
+	pdata->ftrace_size = 0;
+}
+
 static int __init ramoops_memreserve(char *p)
 {
 	unsigned long size;
@@ -990,14 +1030,14 @@ static int __init ramoops_memreserve(char *p)
 	size = memparse(p, &p) & PAGE_MASK;
 	ramoops_data.mem_size = size;
 	ramoops_data.mem_address = 0xB0000000;
-	ramoops_data.console_size = size / 2;
-	ramoops_data.pmsg_size = size / 2;
 	ramoops_data.dump_oops = 1;
+	ramoops_memreserve_set_default_layout(&ramoops_data);
 
 	pr_info("msm_reserve_ramoops_memory addr=%llx,size=%lx\n",
 		ramoops_data.mem_address, ramoops_data.mem_size);
-	pr_info("msm_reserve_ramoops_memory record_size=%lx,ftrace_size=%lx\n",
-		ramoops_data.record_size, ramoops_data.ftrace_size);
+	pr_info("msm_reserve_ramoops_memory record_size=%lx,console_size=%lx,pmsg_size=%lx,ftrace_size=%lx\n",
+		ramoops_data.record_size, ramoops_data.console_size,
+		ramoops_data.pmsg_size, ramoops_data.ftrace_size);
 
 	memblock_reserve(ramoops_data.mem_address, ramoops_data.mem_size);
 
