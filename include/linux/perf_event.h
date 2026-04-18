@@ -1085,6 +1085,12 @@ extern void __perf_sw_event(u32, u64, struct pt_regs *, u64);
 static inline void perf_arch_fetch_caller_regs(struct pt_regs *regs, unsigned long ip) { }
 #endif
 
+#ifndef perf_arch_bp_prepare_sample
+static inline void perf_arch_bp_prepare_sample(struct perf_event *bp,
+					       struct perf_sample_data *sample,
+					       struct pt_regs *regs) { }
+#endif
+
 /*
  * Take a snapshot of the regs. Skip ip and frame pointer to
  * the nth caller. We only need a few of the regs:

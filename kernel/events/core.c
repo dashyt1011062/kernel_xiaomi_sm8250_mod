@@ -9048,8 +9048,10 @@ void perf_bp_event(struct perf_event *bp, void *data)
 
 	perf_sample_data_init(&sample, bp->attr.bp_addr, 0);
 
-	if (!bp->hw.state && !perf_exclude_event(bp, regs))
+	if (!bp->hw.state && !perf_exclude_event(bp, regs)) {
+		perf_arch_bp_prepare_sample(bp, &sample, regs);
 		perf_swevent_event(bp, 1, &sample, regs);
+	}
 }
 #endif
 

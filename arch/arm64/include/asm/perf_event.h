@@ -17,8 +17,13 @@
 #ifndef __ASM_PERF_EVENT_H
 #define __ASM_PERF_EVENT_H
 
+#include <uapi/asm/perf_event.h>
+
 #include <asm/stack_pointer.h>
 #include <asm/ptrace.h>
+
+struct perf_event;
+struct perf_sample_data;
 
 #define	ARMV8_PMU_MAX_COUNTERS	32
 #define	ARMV8_PMU_COUNTER_MASK	(ARMV8_PMU_MAX_COUNTERS - 1)
@@ -81,6 +86,13 @@ extern unsigned long perf_instruction_pointer(struct pt_regs *regs);
 extern unsigned long perf_misc_flags(struct pt_regs *regs);
 #define perf_misc_flags(regs)	perf_misc_flags(regs)
 #define perf_arch_bpf_user_pt_regs(regs) &regs->user_regs
+#endif
+
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+extern void perf_arch_bp_prepare_sample(struct perf_event *bp,
+					struct perf_sample_data *sample,
+					struct pt_regs *regs);
+#define perf_arch_bp_prepare_sample	perf_arch_bp_prepare_sample
 #endif
 
 #define perf_arch_fetch_caller_regs(regs, __ip) { \

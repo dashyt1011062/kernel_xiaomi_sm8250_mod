@@ -32,6 +32,7 @@
 
 #include <asm/current.h>
 #include <asm/debug-monitors.h>
+#include <asm/fpsimd.h>
 #include <asm/hw_breakpoint.h>
 #include <asm/traps.h>
 #include <asm/cputype.h>
@@ -49,6 +50,44 @@ static DEFINE_PER_CPU(int, stepping_kernel_bp);
 /* Number of BRP/WRP registers on this CPU. */
 static int core_num_brps;
 static int core_num_wrps;
+
+void perf_arch_bp_prepare_sample(struct perf_event *bp,
+				 struct perf_sample_data *sample,
+				 struct pt_regs *regs)
+{
+	struct perf_arm64_bp_raw_sample payload = {
+		.magic = PERF_ARM64_BP_RAW_MAGIC,
+		.version = PERF_ARM64_BP_RAW_VERSION,
+		.size = sizeof(payload),
+	};
+	struct perf_raw_record raw = {
+		.frag = {
+			.size = sizeof(payload),
+			.data = &payload,
+		},
+		.size = sizeof(payload),
+	};
+	const struct user_fpsimd_state *fpsimd_state;
+	int i;
+
+	if (!(bp->attr.sample_type & PERF_SAMPLE_RAW))
+		return;
+
+	if (!user_mode(regs) || (current->flags & PF_KTHREAD))
+		return;
+
+	fpsimd_signal_preserve_current_state();
+
+	fpsimd_state = &current->thread.uw.fpsimd_state;
+	payload.flags = PERF_ARM64_BP_RAW_F_VALID | PERF_ARM64_BP_RAW_F_USER;
+	payload.trigger = counter_arch_bp(bp)->trigger;
+	for (i = 0; i < ARRAY_SIZE(payload.s); i++)
+		payload.s[i] = (__u32)fpsimd_state->vregs[i];
+	payload.fpsr = fpsimd_state->fpsr;
+	payload.fpcr = fpsimd_state->fpcr;
+
+	sample->raw = &raw;
+}
 
 int hw_breakpoint_slots(int type)
 {
