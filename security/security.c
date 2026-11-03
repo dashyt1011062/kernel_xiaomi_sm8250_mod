@@ -82,7 +82,6 @@ int __init security_init(void)
 	 */
 	capability_add_hooks();
 	yama_add_hooks();
-	yama_init_sysctl();
 	loadpin_add_hooks();
 
 	/*
@@ -92,90 +91,6 @@ int __init security_init(void)
 
 	return 0;
 }
-
-static int __init yama_sysctl_late_init(void)
-{
-	yama_init_sysctl();
-	return 0;
-}
-late_initcall(yama_sysctl_late_init);
-
-#ifdef CONFIG_SYSCTL
-static int md_test_value = 1;
-
-static struct ctl_path md_test_path[] = {
-	{ .procname = "kernel", },
-	{ }
-};
-
-static struct ctl_table md_test_table[] = {
-	{
-		.procname     = "md_test",
-		.data         = &md_test_value,
-		.maxlen       = sizeof(md_test_value),
-		.mode         = 0644,
-		.proc_handler = proc_dointvec,
-	},
-	{ }
-};
-
-static int __init md_test_sysctl_init(void)
-{
-	if (!register_sysctl_paths(md_test_path, md_test_table))
-		pr_err("md_test: sysctl registration failed\n");
-	return 0;
-}
-late_initcall(md_test_sysctl_init);
-#endif
-
-#ifdef CONFIG_SYSCTL
-/* Fallback Yama sysctl registration when LSM init path is missing. */
-static int yama_ptrace_scope = 1;
-static int yama_zero;
-static int yama_max_scope = 3;
-
-static struct ctl_path yama_sysctl_fallback_path[] = {
-	{ .procname = "kernel", },
-	{ .procname = "yama", },
-	{ }
-};
-
-static struct ctl_table yama_sysctl_fallback_table[] = {
-	{
-		.procname     = "ptrace_scope",
-		.data         = &yama_ptrace_scope,
-		.maxlen       = sizeof(int),
-		.mode         = 0644,
-		.proc_handler = proc_dointvec_minmax,
-		.extra1       = &yama_zero,
-		.extra2       = &yama_max_scope,
-	},
-	{ }
-};
-
-static int __init yama_sysctl_fallback_init(void)
-{
-	if (!register_sysctl_paths(yama_sysctl_fallback_path,
-				   yama_sysctl_fallback_table))
-		pr_err("yama: fallback sysctl registration failed\n");
-	return 0;
-}
-late_initcall(yama_sysctl_fallback_init);
-#endif
-
-/* Force Yama LSM hooks into the chain, and keep symbols from being GC'd. */
-extern void yama_task_free(struct task_struct *task) __attribute__((weak));
-extern void __init yama_add_hooks(void);
-
-static int __init force_yama_hooks(void)
-{
-	/* Touch weak symbol to avoid LTO stripping when present. */
-	if (yama_task_free)
-		(void)yama_task_free;
-	yama_add_hooks();
-	return 0;
-}
-late_initcall(force_yama_hooks);
 
 /* Save user chosen LSM */
 static int __init choose_lsm(char *str)
@@ -241,8 +156,6 @@ static int lsm_append(char *new, char **result)
  */
 int __init security_module_enable(const char *module)
 {
-	if (!strcmp(module, "yama"))
-		return true;
 	return !strcmp(module, chosen_lsm);
 }
 

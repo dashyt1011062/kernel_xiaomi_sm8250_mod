@@ -18,16 +18,10 @@
 #include <linux/prctl.h>
 #include <linux/ratelimit.h>
 #include <linux/workqueue.h>
-#include <linux/cred.h>
 #include <linux/string_helpers.h>
 #include <linux/task_work.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
-#include <linux/proc_fs.h>
-#include <linux/uaccess.h>
-
-static struct proc_dir_entry *yama_proc_dir;
-static struct proc_dir_entry *yama_proc_scope;
 
 #define YAMA_SCOPE_DISABLED	0
 #define YAMA_SCOPE_RELATIONAL	1
@@ -47,8 +41,6 @@ struct ptrace_relation {
 
 static LIST_HEAD(ptracer_relations);
 static DEFINE_SPINLOCK(ptracer_relations_lock);
-static bool yama_hooks_added;
-static bool yama_sysctl_registered;
 
 static void yama_relation_cleanup(struct work_struct *work);
 static DECLARE_WORK(yama_relation_work, yama_relation_cleanup);
@@ -478,87 +470,18 @@ static struct ctl_table yama_sysctl_table[] = {
 	},
 	{ }
 };
-
-static ssize_t yama_scope_read(struct file *file, char __user *buf,
-			       size_t count, loff_t *ppos)
+static void __init yama_init_sysctl(void)
 {
-	char tmp[16];
-	int len = scnprintf(tmp, sizeof(tmp), "%d\n", ptrace_scope);
-
-	return simple_read_from_buffer(buf, count, ppos, tmp, len);
-}
-
-static ssize_t yama_scope_write(struct file *file, const char __user *buf,
-				size_t count, loff_t *ppos)
-{
-	char tmp[16];
-	int val;
-
-	if (count >= sizeof(tmp))
-		return -EINVAL;
-	if (copy_from_user(tmp, buf, count))
-		return -EFAULT;
-	tmp[count] = '\0';
-	if (kstrtoint(tmp, 0, &val))
-		return -EINVAL;
-	if (val < YAMA_SCOPE_DISABLED || val > YAMA_SCOPE_NO_ATTACH)
-		return -EINVAL;
-	if (!uid_eq(current_euid(), GLOBAL_ROOT_UID))
-		return -EPERM;
-
-	ptrace_scope = val;
-	return count;
-}
-
-static const struct file_operations yama_scope_fops = {
-	.read		= yama_scope_read,
-	.write		= yama_scope_write,
-};
-
-static void yama_init_procfs_fallback(void)
-{
-	if (yama_proc_scope)
-		return;
-	yama_proc_dir = proc_mkdir("yama", NULL);
-	if (!yama_proc_dir)
-		return;
-	yama_proc_scope = proc_create("ptrace_scope", 0644, yama_proc_dir,
-				      &yama_scope_fops);
-}
-
-static int __init yama_procfs_initcall(void)
-{
-	yama_init_procfs_fallback();
-	return 0;
-}
-late_initcall(yama_procfs_initcall);
-void __init yama_init_sysctl(void)
-{
-	if (yama_sysctl_registered)
-		return;
-	if (!register_sysctl_paths(yama_sysctl_path, yama_sysctl_table)) {
-		pr_err("Yama: sysctl registration failed.\n");
-		return;
-	}
-	yama_sysctl_registered = true;
+	if (!register_sysctl_paths(yama_sysctl_path, yama_sysctl_table))
+		panic("Yama: sysctl registration failed.\n");
 }
 #else
-void __init yama_init_sysctl(void) { }
+static inline void yama_init_sysctl(void) { }
 #endif /* CONFIG_SYSCTL */
 
 void __init yama_add_hooks(void)
 {
-	if (yama_hooks_added)
-		return;
-	yama_hooks_added = true;
 	pr_info("Yama: becoming mindful.\n");
 	security_add_hooks(yama_hooks, ARRAY_SIZE(yama_hooks), "yama");
 	yama_init_sysctl();
 }
-
-static int __init yama_force_initcall(void)
-{
-	yama_add_hooks();
-	return 0;
-}
-late_initcall(yama_force_initcall);
